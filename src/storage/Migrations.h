@@ -5,7 +5,7 @@ struct sqlite3;
 namespace storage {
 
 // The schema version this build targets.
-inline constexpr int kTargetSchemaVersion = 2;
+inline constexpr int kTargetSchemaVersion = 4;
 
 // Reads the current schema version (0 if the schema_version table is absent).
 int GetSchemaVersion(sqlite3* db);

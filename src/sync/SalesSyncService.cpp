@@ -23,6 +23,10 @@ namespace {
 // Skip an immediate startup sync if the last success was this recent (§22).
 constexpr long long kStartupFreshnessSeconds = 300;  // 5 minutes
 
+// Bounds how many historical dates a single app can backfill per sync cycle,
+// so one wishlist pass can't turn a sync into a multi-minute API crawl.
+constexpr int kWishlistBackfillStepsPerCycle = 45;
+
 int IntervalMinutes() {
     return static_cast<int>(storage::SettingsStore::GetRefreshInterval());
 }
@@ -258,6 +262,7 @@ void SalesSyncService::RunSynchronization(storage::Database& db,
             status_.totalDates = 0;
             status_.completedDates = 0;
         }
+        SyncWishlists(db, client, key);
         Post(app::WM_APP_SYNC_COMPLETED);
         return;
     }
@@ -367,8 +372,105 @@ void SalesSyncService::RunSynchronization(storage::Database& db,
         status_.notification = notification;
     }
     platform::Log::Info(L"Sync", L"Sync completed successfully");
+
+    SyncWishlists(db, client, key);
+
     Post(app::WM_APP_TOTALS_CHANGED);
     Post(app::WM_APP_SYNC_COMPLETED);
+}
+
+void SalesSyncService::SyncKnownApps(storage::Database& db,
+                                     steam::SteamFinancialClient& client) {
+    security::DpapiSecretStore publisherStore(platform::GetPublisherApiKeyPath());
+    security::SecureString publisherKey;
+    if (!publisherStore.HasStoredKey() || !publisherStore.Load(publisherKey) ||
+        publisherKey.Empty()) {
+        return;  // no publisher key configured - DLC/Unreleased just stay empty
+    }
+
+    std::vector<steam::PartnerApp> apps;
+    const steam::FinancialResult r = client.GetAppList(publisherKey, apps);
+    if (!r.ok()) {
+        platform::Log::Warn(L"Sync", L"GetAppList failed, httpStatus=" +
+                                         std::to_wstring(r.httpStatus));
+        return;
+    }
+    const std::string now = platform::UtcNowIso8601();
+    for (const steam::PartnerApp& app : apps) {
+        db.UpsertKnownApp(app.appId, app.appName, app.appType, now);
+    }
+}
+
+void SalesSyncService::SyncWishlists(storage::Database& db,
+                                     steam::SteamFinancialClient& client,
+                                     const security::SecureString& key) {
+    SyncKnownApps(db, client);
+
+    const std::string today = platform::SteamToday();
+    const std::string yesterday = platform::SteamDateDaysAgo(1);
+
+    for (const storage::AppRef& app : db.GetKnownApps()) {
+        // Rolling refresh: today + yesterday are re-checked every cycle since
+        // Steam settles wishlist data with roughly a one-day lag.
+        for (const std::string& date : {yesterday, today}) {
+            steam::AppWishlistReport report;
+            const steam::FinancialResult r =
+                client.GetAppWishlistReporting(key, app.appId, date, report);
+            if (!r.ok()) {
+                platform::Log::Warn(
+                    L"Sync", L"Wishlist refresh failed for app " +
+                                 std::to_wstring(app.appId));
+                continue;
+            }
+            storage::DailyAppWishlistRow row;
+            row.appId = app.appId;
+            row.adds = report.summary.adds;
+            row.deletes = report.summary.deletes;
+            row.purchases = report.summary.purchases;
+            row.gifts = report.summary.gifts;
+            db.UpsertWishlistDay(date, row);
+        }
+
+        // Bounded backward backfill, resuming from a per-app cursor. daysAgo
+        // starts at backfillDays+2 to skip over today/yesterday, which the
+        // rolling refresh above already covers.
+        int backfillDays = 0;
+        std::string minDate;
+        db.GetWishlistSyncState(app.appId, backfillDays, minDate);
+
+        for (int steps = 0; steps < kWishlistBackfillStepsPerCycle; ++steps) {
+            const int daysAgo = backfillDays + 2;
+            const std::string date = platform::SteamDateDaysAgo(daysAgo);
+            if (!minDate.empty() && date < minDate) {
+                break;  // already past the app's earliest available date
+            }
+
+            steam::AppWishlistReport report;
+            const steam::FinancialResult r =
+                client.GetAppWishlistReporting(key, app.appId, date, report);
+            if (!r.ok()) {
+                break;  // retry this app from the same point next cycle
+            }
+
+            storage::DailyAppWishlistRow row;
+            row.appId = app.appId;
+            row.adds = report.summary.adds;
+            row.deletes = report.summary.deletes;
+            row.purchases = report.summary.purchases;
+            row.gifts = report.summary.gifts;
+            db.UpsertWishlistDay(date, row);
+
+            backfillDays = daysAgo;
+            if (!report.appMinDate.empty()) {
+                minDate = report.appMinDate;
+            }
+            if (!minDate.empty() && date <= minDate) {
+                break;  // reached the app's earliest available date
+            }
+        }
+
+        db.SetWishlistSyncState(app.appId, backfillDays, minDate);
+    }
 }
 
 }  // namespace sync

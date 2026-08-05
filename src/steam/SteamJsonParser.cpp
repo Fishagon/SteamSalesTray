@@ -44,8 +44,27 @@ constexpr const char* kAppInfo = "app_info";
 constexpr const char* kAppInfoAppId = "appid";
 constexpr const char* kAppInfoName = "app_name";
 
+// GetAppWishlistReporting
+constexpr const char* kWishlistAppId = "appid";
+constexpr const char* kWishlistDate = "date";
+constexpr const char* kWishlistSummary = "wishlist_summary";
+constexpr const char* kWishlistAdds = "wishlist_adds";
+constexpr const char* kWishlistDeletes = "wishlist_deletes";
+constexpr const char* kWishlistPurchases = "wishlist_purchases";
+constexpr const char* kWishlistGifts = "wishlist_gifts";
+constexpr const char* kAppMinDate = "app_min_date";
+
 // Common Steam error indicator.
 constexpr const char* kError = "error";
+
+// GetPartnerAppListForWebAPIKey - classic Steam Web API shape, not the
+// {"response": {...}} wrapper every other call here uses.
+constexpr const char* kAppList = "applist";
+constexpr const char* kApps = "apps";
+constexpr const char* kApp = "app";
+constexpr const char* kAppListAppId = "appid";
+constexpr const char* kAppListAppType = "app_type";
+constexpr const char* kAppListAppName = "app_name";
 
 std::string GetStr(yyjson_val* obj, const char* key) {
     yyjson_val* v = yyjson_obj_get(obj, key);
@@ -234,6 +253,101 @@ ParseResult ParseDetailedSalesPage(const std::string& json,
         }
     }
     // No records array is valid (e.g. a trailing empty page).
+
+    result.status = ParseStatus::Ok;
+    yyjson_doc_free(doc);
+    return result;
+}
+
+ParseResult ParseAppWishlistReporting(const std::string& json,
+                                      AppWishlistReport& out) {
+    out = {};
+    ParseResult result;
+
+    yyjson_doc* doc = yyjson_read(json.data(), json.size(), 0);
+    if (!doc) {
+        result.status = ParseStatus::InvalidJson;
+        result.message = L"could not parse JSON";
+        return result;
+    }
+
+    yyjson_val* response = GetResponse(doc, result);
+    if (!response) {
+        yyjson_doc_free(doc);
+        return result;
+    }
+
+    out.appId = GetInt64(response, kWishlistAppId);
+    out.date = GetStr(response, kWishlistDate);
+    out.appMinDate = GetStr(response, kAppMinDate);
+
+    // Absent on out-of-range dates (§ docs: "empty response except for
+    // app_min_date"); zero-valued summary is a valid, meaningful result.
+    yyjson_val* summary = yyjson_obj_get(response, kWishlistSummary);
+    if (summary && yyjson_is_obj(summary)) {
+        out.summary.adds = GetInt64(summary, kWishlistAdds);
+        out.summary.deletes = GetInt64(summary, kWishlistDeletes);
+        out.summary.purchases = GetInt64(summary, kWishlistPurchases);
+        out.summary.gifts = GetInt64(summary, kWishlistGifts);
+    }
+
+    result.status = ParseStatus::Ok;
+    yyjson_doc_free(doc);
+    return result;
+}
+
+ParseResult ParseGetPartnerAppList(const std::string& json,
+                                   std::vector<PartnerApp>& out) {
+    out.clear();
+    ParseResult result;
+
+    yyjson_doc* doc = yyjson_read(json.data(), json.size(), 0);
+    if (!doc) {
+        result.status = ParseStatus::InvalidJson;
+        result.message = L"could not parse JSON";
+        return result;
+    }
+
+    yyjson_val* root = yyjson_doc_get_root(doc);
+    if (!root || !yyjson_is_obj(root)) {
+        result.status = ParseStatus::StructureError;
+        result.message = L"response is not a JSON object";
+        yyjson_doc_free(doc);
+        return result;
+    }
+    yyjson_val* err = yyjson_obj_get(root, kError);
+    if (err) {
+        result.status = ParseStatus::ApiError;
+        result.message = L"Steam returned an API error";
+        yyjson_doc_free(doc);
+        return result;
+    }
+
+    yyjson_val* appList = yyjson_obj_get(root, kAppList);
+    if (!appList || !yyjson_is_obj(appList)) {
+        result.status = ParseStatus::MissingResponse;
+        result.message = L"missing \"applist\" object";
+        yyjson_doc_free(doc);
+        return result;
+    }
+    yyjson_val* apps = yyjson_obj_get(appList, kApps);
+    yyjson_val* appArr = apps ? yyjson_obj_get(apps, kApp) : nullptr;
+
+    if (appArr && yyjson_is_arr(appArr)) {
+        size_t idx, max;
+        yyjson_val* item;
+        yyjson_arr_foreach(appArr, idx, max, item) {
+            if (!yyjson_is_obj(item)) {
+                continue;
+            }
+            PartnerApp app;
+            app.appId = GetInt64(item, kAppListAppId);
+            app.appType = GetStr(item, kAppListAppType);
+            app.appName = GetStr(item, kAppListAppName);
+            out.push_back(std::move(app));
+        }
+    }
+    // A missing/empty "app" array is valid (e.g. no DLC on the account).
 
     result.status = ParseStatus::Ok;
     yyjson_doc_free(doc);

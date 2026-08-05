@@ -141,6 +141,100 @@ static void TestDetailedSales() {
     }
 }
 
+static void TestAppWishlistReporting() {
+    std::printf("[AppWishlistReporting]\n");
+    {
+        AppWishlistReport out;
+        auto r = ParseAppWishlistReporting(
+            R"({"response":{"appid":480,"date":"2026/07/18",)"
+            R"("app_min_date":"2020/01/01","wishlist_summary":{)"
+            R"("wishlist_adds":120,"wishlist_deletes":30,)"
+            R"("wishlist_purchases":15,"wishlist_gifts":2}}})",
+            out);
+        CHECK(r.ok(), "normal wishlist reporting parses ok");
+        CHECK(out.appId == 480, "appid captured");
+        CHECK(out.date == "2026/07/18", "date captured");
+        CHECK(out.appMinDate == "2020/01/01", "app_min_date captured");
+        CHECK(out.summary.adds == 120 && out.summary.deletes == 30 &&
+                  out.summary.purchases == 15 && out.summary.gifts == 2,
+              "wishlist_summary fields parsed");
+    }
+    {
+        // Out-of-range date: only app_min_date is populated (docs: "empty
+        // response except for app_min_date").
+        AppWishlistReport out;
+        auto r = ParseAppWishlistReporting(
+            R"({"response":{"appid":480,"date":"2019/01/01",)"
+            R"("app_min_date":"2020/01/01"}})",
+            out);
+        CHECK(r.ok(), "out-of-range response still parses ok");
+        CHECK(out.appMinDate == "2020/01/01", "app_min_date captured");
+        CHECK(out.summary.adds == 0 && out.summary.deletes == 0 &&
+                  out.summary.purchases == 0 && out.summary.gifts == 0,
+              "missing wishlist_summary defaults to zero");
+    }
+    {
+        AppWishlistReport out;
+        auto r = ParseAppWishlistReporting(R"({"something":1})", out);
+        CHECK(r.status == ParseStatus::MissingResponse, "missing response");
+    }
+    {
+        AppWishlistReport out;
+        auto r = ParseAppWishlistReporting(R"({"error":{"code":403}})", out);
+        CHECK(r.status == ParseStatus::ApiError, "api error payload detected");
+    }
+    {
+        AppWishlistReport out;
+        auto r = ParseAppWishlistReporting("{not valid json", out);
+        CHECK(r.status == ParseStatus::InvalidJson, "invalid json");
+    }
+}
+
+static void TestGetPartnerAppList() {
+    std::printf("[GetPartnerAppList]\n");
+    {
+        std::vector<PartnerApp> out;
+        auto r = ParseGetPartnerAppList(
+            R"({"applist":{"apps":{"app":[)"
+            R"({"appid":500,"app_type":"game","app_name":"Left 4 Dead"},)"
+            R"({"appid":222840,"app_type":"tool",)"
+            R"("app_name":"Left 4 Dead Dedicated Server"},)"
+            R"({"appid":222850,"app_type":"dlc","app_name":"Some DLC"})"
+            R"(]}}})",
+            out);
+        CHECK(r.ok(), "normal app list parses ok");
+        CHECK(out.size() == 3, "three apps returned");
+        if (out.size() == 3) {
+            CHECK(out[0].appId == 500 && out[0].appType == "game" &&
+                      out[0].appName == "Left 4 Dead",
+                  "first app fields parsed");
+            CHECK(out[2].appType == "dlc", "dlc type preserved");
+        }
+    }
+    {
+        // Empty app array is valid (e.g. an account with no DLC yet).
+        std::vector<PartnerApp> out;
+        auto r = ParseGetPartnerAppList(
+            R"({"applist":{"apps":{"app":[]}}})", out);
+        CHECK(r.ok() && out.empty(), "empty app array is valid");
+    }
+    {
+        std::vector<PartnerApp> out;
+        auto r = ParseGetPartnerAppList(R"({"applist":{}})", out);
+        CHECK(r.ok() && out.empty(), "missing apps/app is valid (empty list)");
+    }
+    {
+        std::vector<PartnerApp> out;
+        auto r = ParseGetPartnerAppList(R"({"something":1})", out);
+        CHECK(r.status == ParseStatus::MissingResponse, "missing applist");
+    }
+    {
+        std::vector<PartnerApp> out;
+        auto r = ParseGetPartnerAppList("{not valid json", out);
+        CHECK(r.status == ParseStatus::InvalidJson, "invalid json");
+    }
+}
+
 static void TestUrlEncoder() {
     std::printf("[UrlEncoder]\n");
     using network::EncodeComponent;
@@ -155,6 +249,8 @@ static void TestUrlEncoder() {
 int main() {
     TestChangedDates();
     TestDetailedSales();
+    TestAppWishlistReporting();
+    TestGetPartnerAppList();
     TestUrlEncoder();
     std::printf("\n%s (failures=%d)\n",
                 g_fail ? "TESTS FAILED" : "ALL TESTS PASSED", g_fail);

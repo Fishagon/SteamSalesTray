@@ -66,6 +66,42 @@ public:
                              const std::string& endDate);
     std::int64_t SumLifetime();
 
+    // --- wishlist ------------------------------------------------------------
+    // Every known product (source of app ids for GetAppWishlistReporting,
+    // which is queried per app rather than paginated across all apps).
+    std::vector<AppRef> GetKnownApps();
+
+    // Upserts one (date, app) wishlist row; wishlist_balance is computed as
+    // adds - deletes - purchases - gifts before storing.
+    bool UpsertWishlistDay(const std::string& date,
+                           const DailyAppWishlistRow& row);
+
+    // Per-app wishlist backfill cursor. Returns false (leaving outputs at
+    // their defaults) if no state row exists yet for this app.
+    bool GetWishlistSyncState(std::int64_t appId, int& backfillDays,
+                              std::string& minDate);
+    bool SetWishlistSyncState(std::int64_t appId, int backfillDays,
+                              const std::string& minDate);
+
+    // Every known app with enough to classify it (type, ever-sold), for the
+    // Product Sales window's Released/DLC/Unreleased grouping.
+    std::vector<ProductInfo> GetAllProducts();
+
+    // Upserts app_type/display_name for one app, discovered independently of
+    // sales via GetPartnerAppListForWebAPIKey (the only source for DLC and
+    // unreleased titles, which never appear in daily_product_sales).
+    bool UpsertKnownApp(std::int64_t appId, const std::string& displayNameUtf8,
+                       const std::string& appType, const std::string& nowUtc);
+
+    // Per-app wishlist balance rows for a period, for the per-product "WL
+    // Balance" column (as opposed to the SumWishlistBalance* scalars above,
+    // used for the aggregate label).
+    std::vector<ProductWishlistBalance> QueryWishlistBalanceRowsForDate(
+        const std::string& date);
+    std::vector<ProductWishlistBalance> QueryWishlistBalanceRowsForRange(
+        const std::string& startDate, const std::string& endDate);
+    std::vector<ProductWishlistBalance> QueryWishlistBalanceRowsLifetime();
+
 private:
     sqlite3* db_ = nullptr;
 };

@@ -15,10 +15,18 @@ constexpr wchar_t kPathChangedDates[] =
     L"/IPartnerFinancialsService/GetChangedDatesForPartner/v001/";
 constexpr wchar_t kPathDetailedSales[] =
     L"/IPartnerFinancialsService/GetDetailedSales/v001/";
+constexpr wchar_t kPathWishlistReporting[] =
+    L"/IPartnerFinancialsService/GetAppWishlistReporting/v001/";
+constexpr wchar_t kPathAppList[] =
+    L"/ISteamApps/GetPartnerAppListForWebAPIKey/v2/";
 
 // Response-size caps (§16).
 constexpr size_t kMaxChangedDates = 8u * 1024 * 1024;
 constexpr size_t kMaxDetailedSales = 32u * 1024 * 1024;
+// One app/day of summary counters - tiny compared to a sales page.
+constexpr size_t kMaxWishlistReporting = 2u * 1024 * 1024;
+// One row per app in the account's portfolio - same tier as changed dates.
+constexpr size_t kMaxAppList = 8u * 1024 * 1024;
 
 // Safety cap so a misbehaving server can't loop forever over one date.
 constexpr int kMaxPagesPerDate = 10'000;
@@ -196,6 +204,75 @@ FinancialResult SteamFinancialClient::GetAllDetailedSalesForDate(
     FinancialResult ok;
     ok.kind = ResultKind::Success;
     return ok;
+}
+
+FinancialResult SteamFinancialClient::GetAppWishlistReporting(
+    const security::SecureString& keyUtf8, std::int64_t appId,
+    const std::string& date, AppWishlistReport& out) {
+    out = {};
+    if (!http_.IsValid()) {
+        FinancialResult r;
+        r.kind = ResultKind::Offline;
+        r.message = L"Could not initialize the network session.";
+        return r;
+    }
+
+    std::wstring extra = L"appid=" + std::to_wstring(appId) +
+                         L"&date=" + network::EncodeComponent(date);
+    std::wstring query = BuildQuery(keyUtf8, extra);
+
+    network::HttpResult http = http_.Get(kHost, kPort, kPathWishlistReporting,
+                                        query, kMaxWishlistReporting);
+    ::SecureZeroMemory(query.data(), query.size() * sizeof(wchar_t));
+
+    FinancialResult result = Classify(http);
+    if (!result.ok()) {
+        return result;
+    }
+
+    ParseResult parsed = ParseAppWishlistReporting(http.body, out);
+    if (!parsed.ok()) {
+        result.kind = (parsed.status == ParseStatus::ApiError)
+                          ? ResultKind::Auth
+                          : ResultKind::Parse;
+        result.message = ParseMessage(parsed);
+    }
+    return result;
+}
+
+FinancialResult SteamFinancialClient::GetAppList(
+    const security::SecureString& keyUtf8, std::vector<PartnerApp>& out) {
+    out.clear();
+    if (!http_.IsValid()) {
+        FinancialResult r;
+        r.kind = ResultKind::Offline;
+        r.message = L"Could not initialize the network session.";
+        return r;
+    }
+
+    // ISteamApps is a different interface than IPartnerFinancialsService, so
+    // it takes just the key - no include_view_grants (that's Financial-only).
+    std::wstring query =
+        L"key=" + network::EncodeComponent(
+                     std::string(keyUtf8.Data(), keyUtf8.Size()));
+
+    network::HttpResult http =
+        http_.Get(kHost, kPort, kPathAppList, query, kMaxAppList);
+    ::SecureZeroMemory(query.data(), query.size() * sizeof(wchar_t));
+
+    FinancialResult result = Classify(http);
+    if (!result.ok()) {
+        return result;
+    }
+
+    ParseResult parsed = ParseGetPartnerAppList(http.body, out);
+    if (!parsed.ok()) {
+        result.kind = (parsed.status == ParseStatus::ApiError)
+                          ? ResultKind::Auth
+                          : ResultKind::Parse;
+        result.message = ParseMessage(parsed);
+    }
+    return result;
 }
 
 }  // namespace steam

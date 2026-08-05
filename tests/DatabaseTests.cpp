@@ -136,9 +136,195 @@ static void TestDatabase() {
     ::DeleteFileW((path + L"-shm").c_str());
 }
 
+static std::int64_t BalanceFor(
+    const std::vector<storage::ProductWishlistBalance>& v,
+    std::int64_t appId) {
+    for (const auto& p : v) {
+        if (p.appId == appId) return p.balance;
+    }
+    return -999999;  // sentinel: not present
+}
+
+static void TestWishlist() {
+    std::printf("[Wishlist]\n");
+    wchar_t tmp[MAX_PATH]; ::GetTempPathW(MAX_PATH, tmp);
+    std::wstring path = std::wstring(tmp) + L"sst_test_wishlist.db";
+    ::DeleteFileW(path.c_str());
+    ::DeleteFileW((path + L"-wal").c_str());
+    ::DeleteFileW((path + L"-shm").c_str());
+
+    storage::Database db;
+    CHECK(db.Open(path), "Open() creates + migrates (incl. schema v3)");
+
+    const std::string now = "2026-07-20T00:00:00Z";
+    const std::string d1 = "2026/07/18";
+    const std::string d2 = "2026/07/19";
+
+    // Wishlist rows FK-reference products, so seed them via a sales replace
+    // first (mirrors how GetKnownApps() is populated in the real sync).
+    std::vector<storage::DailyProductRow> sales = {{480, "git gud", 1, 1, 0},
+                                                   {490, "Deluxe", 1, 1, 0}};
+    CHECK(db.ReplaceDate(d1, sales, now), "seed products via ReplaceDate");
+
+    auto apps = db.GetKnownApps();
+    CHECK(apps.size() == 2, "GetKnownApps returns both seeded products");
+
+    storage::DailyAppWishlistRow row1{480, 100, 20, 10, 5};  // balance = 65
+    CHECK(db.UpsertWishlistDay(d1, row1), "UpsertWishlistDay d1/480");
+    CHECK(BalanceFor(db.QueryWishlistBalanceRowsForDate(d1), 480) == 65,
+          "balance = adds-deletes-purchases-gifts (100-20-10-5)");
+
+    storage::DailyAppWishlistRow row2{490, 10, 50, 0, 0};  // balance = -40
+    CHECK(db.UpsertWishlistDay(d1, row2), "UpsertWishlistDay d1/490");
+    auto dateRows1 = db.QueryWishlistBalanceRowsForDate(d1);
+    CHECK(BalanceFor(dateRows1, 480) == 65 && BalanceFor(dateRows1, 490) == -40,
+          "both apps' date balances present (65 and -40)");
+
+    // Re-upsert (same date/app) must replace, not accumulate.
+    storage::DailyAppWishlistRow row1b{480, 1, 1, 1, 1};  // balance = -2
+    CHECK(db.UpsertWishlistDay(d1, row1b), "UpsertWishlistDay overwrites");
+    CHECK(BalanceFor(db.QueryWishlistBalanceRowsForDate(d1), 480) == -2,
+          "overwritten, not accumulated");
+
+    storage::DailyAppWishlistRow row1c{480, 5, 0, 0, 0};  // balance = 5
+    CHECK(db.UpsertWishlistDay(d2, row1c), "UpsertWishlistDay d2/480");
+    auto rangeRows = db.QueryWishlistBalanceRowsForRange(d1, d2);
+    CHECK(BalanceFor(rangeRows, 480) == 3,
+          "range sum across dates (-2+5=3)");
+    auto lifetimeRows = db.QueryWishlistBalanceRowsLifetime();
+    CHECK(BalanceFor(lifetimeRows, 480) == 3, "lifetime matches range");
+
+    // Per-app sync cursor round-trips; absent until first set.
+    int days = -1;
+    std::string minDate = "unset";
+    CHECK(!db.GetWishlistSyncState(480, days, minDate),
+          "no sync state yet for a known app");
+    CHECK(days == 0 && minDate.empty(), "outputs reset to defaults");
+    CHECK(db.SetWishlistSyncState(480, 12, "2020/01/01"), "set sync state");
+    CHECK(db.GetWishlistSyncState(480, days, minDate) && days == 12 &&
+              minDate == "2020/01/01",
+          "sync state round-trips");
+    CHECK(db.SetWishlistSyncState(480, 40, ""), "clear min date");
+    CHECK(db.GetWishlistSyncState(480, days, minDate) && minDate.empty(),
+          "cleared min date persists as empty");
+
+    // ClearAllSales must not hit an FK violation now that wishlist tables
+    // reference products, and must wipe wishlist data + cursors too.
+    CHECK(db.ClearAllSales(), "ClearAllSales (wishlist + products, FK-safe)");
+    CHECK(db.QueryWishlistBalanceRowsLifetime().empty(),
+          "wishlist balances cleared");
+    CHECK(db.GetKnownApps().empty(), "products cleared");
+    CHECK(!db.GetWishlistSyncState(480, days, minDate),
+          "wishlist sync state cleared");
+
+    db.Close();
+    ::DeleteFileW(path.c_str());
+    ::DeleteFileW((path + L"-wal").c_str());
+    ::DeleteFileW((path + L"-shm").c_str());
+}
+
+static const storage::ProductInfo* FindProduct(
+    const std::vector<storage::ProductInfo>& v, std::int64_t appId) {
+    for (const auto& p : v) {
+        if (p.appId == appId) return &p;
+    }
+    return nullptr;
+}
+
+static void TestProductClassification() {
+    std::printf("[ProductClassification]\n");
+    wchar_t tmp[MAX_PATH]; ::GetTempPathW(MAX_PATH, tmp);
+    std::wstring path = std::wstring(tmp) + L"sst_test_classification.db";
+    ::DeleteFileW(path.c_str());
+    ::DeleteFileW((path + L"-wal").c_str());
+    ::DeleteFileW((path + L"-shm").c_str());
+
+    storage::Database db;
+    CHECK(db.Open(path), "Open() creates + migrates (incl. schema v4)");
+
+    const std::string now = "2026-07-20T00:00:00Z";
+    const std::string d1 = "2026/07/18";
+    const std::string d2 = "2026/07/19";
+
+    // 480: a real released game, discovered via the sales path.
+    std::vector<storage::DailyProductRow> sales = {{480, "git gud", 1, 1, 0}};
+    CHECK(db.ReplaceDate(d1, sales, now), "seed released app via ReplaceDate");
+
+    // Discovered only via GetPartnerAppListForWebAPIKey - no sales ever.
+    CHECK(db.UpsertKnownApp(222850, "Some DLC", "dlc", now),
+          "UpsertKnownApp: dlc");
+    CHECK(db.UpsertKnownApp(999999, "Upcoming Game", "game", now),
+          "UpsertKnownApp: unreleased game");
+
+    auto products = db.GetAllProducts();
+    CHECK(products.size() == 3, "all three apps known");
+
+    const auto* released = FindProduct(products, 480);
+    CHECK(released && released->appType == "game" && released->everSold,
+          "sales-path app: type game, everSold true");
+
+    const auto* dlc = FindProduct(products, 222850);
+    CHECK(dlc && dlc->appType == "dlc" && !dlc->everSold,
+          "app-list-only dlc: type dlc, everSold false");
+
+    const auto* unreleased = FindProduct(products, 999999);
+    CHECK(unreleased && unreleased->appType == "game" && !unreleased->everSold,
+          "app-list-only game with no sales: everSold false (unreleased)");
+
+    // UpsertKnownApp is authoritative for type/name but must not run for the
+    // sales path - ReplaceDate must never clobber a type UpsertKnownApp set.
+    CHECK(db.UpsertKnownApp(480, "git gud", "application", now),
+          "UpsertKnownApp can override an existing app's type");
+    std::vector<storage::DailyProductRow> sales2 = {{480, "git gud", 2, 2, 0}};
+    CHECK(db.ReplaceDate(d2, sales2, now), "ReplaceDate again for app 480");
+    auto productsAfterResync = db.GetAllProducts();
+    const auto* afterResync = FindProduct(productsAfterResync, 480);
+    CHECK(afterResync && afterResync->appType == "application",
+          "ReplaceDate (sales path) does not clobber app_type");
+
+    // Per-app wishlist balance rows, including an app with wishlist data but
+    // no sales at all (the unreleased title).
+    storage::DailyAppWishlistRow w1{480, 100, 10, 5, 0};    // balance 85
+    storage::DailyAppWishlistRow w2{999999, 50, 0, 0, 0};   // balance 50
+    CHECK(db.UpsertWishlistDay(d1, w1), "wishlist day for released app");
+    CHECK(db.UpsertWishlistDay(d1, w2), "wishlist day for unreleased app");
+    storage::DailyAppWishlistRow w1b{480, 10, 0, 0, 0};     // balance 10
+    CHECK(db.UpsertWishlistDay(d2, w1b), "second wishlist day for app 480");
+
+    auto dateRows = db.QueryWishlistBalanceRowsForDate(d1);
+    CHECK(BalanceFor(dateRows, 480) == 85, "date rows: app 480 balance");
+    CHECK(BalanceFor(dateRows, 999999) == 50,
+          "date rows: unreleased app balance");
+    CHECK(BalanceFor(dateRows, 222850) == 0,
+          "date rows: app with no wishlist data defaults to 0 (LEFT JOIN)");
+
+    auto rangeRows = db.QueryWishlistBalanceRowsForRange(d1, d2);
+    CHECK(BalanceFor(rangeRows, 480) == 95,
+          "range rows: app 480 summed across dates (85+10)");
+    CHECK(BalanceFor(rangeRows, 999999) == 50,
+          "range rows: unreleased app's single-date balance included");
+    CHECK(BalanceFor(rangeRows, 222850) == -999999,
+          "range rows: app with zero wishlist rows ever is absent (INNER JOIN, "
+          "unlike QueryWishlistBalanceRowsForDate's LEFT JOIN default-0)");
+
+    auto lifetimeRows = db.QueryWishlistBalanceRowsLifetime();
+    CHECK(BalanceFor(lifetimeRows, 480) == 95, "lifetime rows: app 480");
+    CHECK(BalanceFor(lifetimeRows, 999999) == 50,
+          "lifetime rows: unreleased app");
+    CHECK(BalanceFor(lifetimeRows, 222850) == -999999,
+          "lifetime rows: app with zero wishlist rows ever is absent");
+
+    db.Close();
+    ::DeleteFileW(path.c_str());
+    ::DeleteFileW((path + L"-wal").c_str());
+    ::DeleteFileW((path + L"-shm").c_str());
+}
+
 int main() {
     TestAggregation();
     TestDatabase();
+    TestWishlist();
+    TestProductClassification();
     std::printf("\n%s (failures=%d)\n",
                 g_fail ? "TESTS FAILED" : "ALL TESTS PASSED", g_fail);
     return g_fail ? 1 : 0;

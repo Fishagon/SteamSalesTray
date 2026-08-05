@@ -60,6 +60,7 @@ struct DialogState {
     HINSTANCE instance = nullptr;
     const KeyValidator* validator = nullptr;
     security::DpapiSecretStore store;
+    security::DpapiSecretStore publisherStore{platform::GetPublisherApiKeyPath()};
     SettingsOutcome outcome;
 
     // Snapshot of the initial preference values, to detect changes.
@@ -75,6 +76,16 @@ void SetKeyStatusLabel(HWND dlg, const DialogState& state) {
                       has ? L"A stored API key is configured. Enter a new key "
                             L"to replace it."
                           : L"No API key stored. Enter one to enable syncing.");
+}
+
+void SetPublisherKeyStatusLabel(HWND dlg, const DialogState& state) {
+    const bool has = state.publisherStore.HasStoredKey();
+    ::SetDlgItemTextW(
+        dlg, IDC_STATIC_PUBLISHER_KEYSTATUS,
+        has ? L"A stored publisher key is configured. Enter a new key to "
+              L"replace it."
+            : L"No publisher key stored - DLC/Unreleased titles won't be "
+              L"detected.");
 }
 
 void PopulateIntervalCombo(HWND dlg, storage::RefreshInterval current) {
@@ -111,7 +122,17 @@ void OnInitDialog(HWND dlg, DialogState* state) {
                           kPasswordChar, 0);
     ::SendDlgItemMessageW(dlg, IDC_EDIT_APIKEY, EM_SETLIMITTEXT, 512, 0);
 
+    ::SendDlgItemMessageW(
+        dlg, IDC_EDIT_PUBLISHER_APIKEY, EM_SETCUEBANNER, TRUE,
+        reinterpret_cast<LPARAM>(
+            L"Your normal Steamworks Web API key (not the Financial key)"));
+    ::SendDlgItemMessageW(dlg, IDC_EDIT_PUBLISHER_APIKEY, EM_SETPASSWORDCHAR,
+                          kPasswordChar, 0);
+    ::SendDlgItemMessageW(dlg, IDC_EDIT_PUBLISHER_APIKEY, EM_SETLIMITTEXT, 512,
+                         0);
+
     SetKeyStatusLabel(dlg, *state);
+    SetPublisherKeyStatusLabel(dlg, *state);
 
     state->initialInterval = storage::SettingsStore::GetRefreshInterval();
     state->initialNotify = storage::SettingsStore::GetNotifyOnNewUnits();
@@ -134,6 +155,11 @@ void OnToggleShowKey(HWND dlg) {
     ::SendDlgItemMessageW(dlg, IDC_EDIT_APIKEY, EM_SETPASSWORDCHAR,
                           show ? 0 : kPasswordChar, 0);
     ::InvalidateRect(::GetDlgItem(dlg, IDC_EDIT_APIKEY), nullptr, TRUE);
+
+    ::SendDlgItemMessageW(dlg, IDC_EDIT_PUBLISHER_APIKEY, EM_SETPASSWORDCHAR,
+                          show ? 0 : kPasswordChar, 0);
+    ::InvalidateRect(::GetDlgItem(dlg, IDC_EDIT_PUBLISHER_APIKEY), nullptr,
+                     TRUE);
 }
 
 void OnTestConnection(HWND dlg, DialogState* state) {
@@ -194,6 +220,32 @@ void OnRemoveKey(HWND dlg, DialogState* state) {
     } else {
         ::SetDlgItemTextW(dlg, IDC_STATIC_TESTRESULT,
                           L"Could not remove the stored key.");
+    }
+}
+
+void OnRemovePublisherKey(HWND dlg, DialogState* state) {
+    if (!state->publisherStore.HasStoredKey()) {
+        ::SetDlgItemTextW(dlg, IDC_STATIC_TESTRESULT,
+                          L"No stored publisher key to remove.");
+        return;
+    }
+    if (::MessageBoxW(dlg,
+                      L"Remove the stored publisher API key?\n\n"
+                      L"DLC and unreleased titles will stop being detected "
+                      L"until you enter a new key. Sales/wishlist syncing is "
+                      L"unaffected.",
+                      L"Remove Stored Publisher API Key",
+                      MB_YESNO | MB_ICONWARNING) != IDYES) {
+        return;
+    }
+    if (state->publisherStore.Remove()) {
+        state->outcome.publisherKeyChanged = true;
+        SetPublisherKeyStatusLabel(dlg, *state);
+        ::SetDlgItemTextW(dlg, IDC_STATIC_TESTRESULT,
+                          L"Stored publisher key removed.");
+    } else {
+        ::SetDlgItemTextW(dlg, IDC_STATIC_TESTRESULT,
+                          L"Could not remove the stored publisher key.");
     }
 }
 
@@ -265,6 +317,31 @@ bool OnSave(HWND dlg, DialogState* state) {
         security::WipeWString(trimmed);
     }
 
+    // 3) Store a new publisher key if one was entered (no validator wired for
+    // this one - GetPartnerAppListForWebAPIKey failures just surface as a
+    // silently-empty DLC/Unreleased section, per the wishlist sync's
+    // best-effort philosophy).
+    std::wstring publisherText =
+        GetEditText(::GetDlgItem(dlg, IDC_EDIT_PUBLISHER_APIKEY));
+    std::wstring publisherTrimmed = TrimWhitespace(publisherText);
+    security::WipeWString(publisherText);
+
+    if (!publisherTrimmed.empty()) {
+        security::SecureString publisherKeyUtf8 =
+            security::WideToSecureUtf8(publisherTrimmed);
+        security::WipeWString(publisherTrimmed);
+
+        if (!state->publisherStore.Store(publisherKeyUtf8)) {
+            ::MessageBoxW(dlg,
+                          L"Failed to protect and save the publisher API key.",
+                          L"Steam Sales Tray", MB_OK | MB_ICONERROR);
+            return false;
+        }
+        state->outcome.publisherKeyChanged = true;
+    } else {
+        security::WipeWString(publisherTrimmed);
+    }
+
     state->outcome.saved = true;
     return true;
 }
@@ -299,6 +376,9 @@ INT_PTR CALLBACK DialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam) {
                     return TRUE;
                 case IDC_BUTTON_REMOVEKEY:
                     OnRemoveKey(dlg, state);
+                    return TRUE;
+                case IDC_BUTTON_REMOVE_PUBLISHERKEY:
+                    OnRemovePublisherKey(dlg, state);
                     return TRUE;
                 case IDOK:
                     if (OnSave(dlg, state)) {

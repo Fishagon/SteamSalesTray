@@ -40,6 +40,19 @@ std::vector<ProductUnits> RunProductQuery(sqlite3_stmt* stmt) {
     return rows;
 }
 
+// Runs a query that returns (app_id, display_name, balance) rows.
+std::vector<ProductWishlistBalance> RunWishlistBalanceQuery(sqlite3_stmt* stmt) {
+    std::vector<ProductWishlistBalance> rows;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        ProductWishlistBalance row;
+        row.appId = sqlite3_column_int64(stmt, 0);
+        row.displayName = platform::Utf8ToWide(ColumnText(stmt, 1));
+        row.balance = sqlite3_column_int64(stmt, 2);
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
 std::int64_t RunScalarSum(sqlite3* db, const char* sql,
                           const std::string* a = nullptr,
                           const std::string* b = nullptr) {
@@ -286,7 +299,11 @@ bool Database::ClearAllSales() {
     if (!ExecSimple(db_, "BEGIN IMMEDIATE;")) {
         return false;
     }
-    if (!ExecSimple(db_, "DELETE FROM daily_product_sales;") ||
+    // Wishlist rows/cursors reference products via FK, so they must go before
+    // the products delete (foreign_keys=ON would otherwise reject it).
+    if (!ExecSimple(db_, "DELETE FROM daily_app_wishlist;") ||
+        !ExecSimple(db_, "DELETE FROM wishlist_sync_state;") ||
+        !ExecSimple(db_, "DELETE FROM daily_product_sales;") ||
         !ExecSimple(db_, "DELETE FROM products;") ||
         !ExecSimple(db_,
                     "UPDATE sync_state SET changed_dates_highwatermark='0', "
@@ -377,6 +394,225 @@ std::int64_t Database::SumLifetime() {
     return RunScalarSum(
         db_,
         "SELECT COALESCE(SUM(net_units_sold),0) FROM daily_product_sales;");
+}
+
+std::vector<AppRef> Database::GetKnownApps() {
+    std::vector<AppRef> apps;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, "SELECT app_id, display_name FROM products;",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        return apps;
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        AppRef app;
+        app.appId = sqlite3_column_int64(stmt, 0);
+        app.displayName = platform::Utf8ToWide(ColumnText(stmt, 1));
+        apps.push_back(std::move(app));
+    }
+    sqlite3_finalize(stmt);
+    return apps;
+}
+
+bool Database::UpsertWishlistDay(const std::string& date,
+                                 const DailyAppWishlistRow& row) {
+    if (!db_) {
+        return false;
+    }
+    const std::int64_t balance =
+        row.adds - row.deletes - row.purchases - row.gifts;
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db_,
+            "INSERT INTO daily_app_wishlist "
+            "(financial_date, app_id, wishlist_adds, wishlist_deletes, "
+            "wishlist_purchases, wishlist_gifts, wishlist_balance) "
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(financial_date, app_id) DO UPDATE SET "
+            "wishlist_adds=excluded.wishlist_adds, "
+            "wishlist_deletes=excluded.wishlist_deletes, "
+            "wishlist_purchases=excluded.wishlist_purchases, "
+            "wishlist_gifts=excluded.wishlist_gifts, "
+            "wishlist_balance=excluded.wishlist_balance;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    BindText(stmt, 1, date);
+    sqlite3_bind_int64(stmt, 2, row.appId);
+    sqlite3_bind_int64(stmt, 3, row.adds);
+    sqlite3_bind_int64(stmt, 4, row.deletes);
+    sqlite3_bind_int64(stmt, 5, row.purchases);
+    sqlite3_bind_int64(stmt, 6, row.gifts);
+    sqlite3_bind_int64(stmt, 7, balance);
+    const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+bool Database::GetWishlistSyncState(std::int64_t appId, int& backfillDays,
+                                    std::string& minDate) {
+    backfillDays = 0;
+    minDate.clear();
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db_,
+            "SELECT backfill_days_covered, min_available_date "
+            "FROM wishlist_sync_state WHERE app_id = ?;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_int64(stmt, 1, appId);
+    bool found = false;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        backfillDays = sqlite3_column_int(stmt, 0);
+        minDate = ColumnText(stmt, 1);
+        found = true;
+    }
+    sqlite3_finalize(stmt);
+    return found;
+}
+
+bool Database::SetWishlistSyncState(std::int64_t appId, int backfillDays,
+                                    const std::string& minDate) {
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db_,
+            "INSERT INTO wishlist_sync_state "
+            "(app_id, backfill_days_covered, min_available_date) "
+            "VALUES (?,?,?) "
+            "ON CONFLICT(app_id) DO UPDATE SET "
+            "backfill_days_covered=excluded.backfill_days_covered, "
+            "min_available_date=excluded.min_available_date;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_int64(stmt, 1, appId);
+    sqlite3_bind_int(stmt, 2, backfillDays);
+    if (minDate.empty()) {
+        sqlite3_bind_null(stmt, 3);
+    } else {
+        BindText(stmt, 3, minDate);
+    }
+    const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+std::vector<ProductInfo> Database::GetAllProducts() {
+    std::vector<ProductInfo> products;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db_,
+            "SELECT p.app_id, p.display_name, p.app_type, "
+            "EXISTS(SELECT 1 FROM daily_product_sales d "
+            "       WHERE d.app_id = p.app_id) AS ever_sold "
+            "FROM products p "
+            "ORDER BY p.display_name COLLATE NOCASE;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        return products;
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        ProductInfo info;
+        info.appId = sqlite3_column_int64(stmt, 0);
+        info.displayName = platform::Utf8ToWide(ColumnText(stmt, 1));
+        info.appType = ColumnText(stmt, 2);
+        info.everSold = sqlite3_column_int(stmt, 3) != 0;
+        products.push_back(std::move(info));
+    }
+    sqlite3_finalize(stmt);
+    return products;
+}
+
+bool Database::UpsertKnownApp(std::int64_t appId,
+                              const std::string& displayNameUtf8,
+                              const std::string& appType,
+                              const std::string& nowUtc) {
+    if (!db_) {
+        return false;
+    }
+    const std::string name =
+        displayNameUtf8.empty() ? ("App " + std::to_string(appId))
+                                 : displayNameUtf8;
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db_,
+            "INSERT INTO products (app_id, display_name, app_type, "
+            "last_seen_utc) VALUES (?,?,?,?) "
+            "ON CONFLICT(app_id) DO UPDATE SET "
+            "display_name=excluded.display_name, "
+            "app_type=excluded.app_type, "
+            "last_seen_utc=excluded.last_seen_utc;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_int64(stmt, 1, appId);
+    BindText(stmt, 2, name);
+    BindText(stmt, 3, appType.empty() ? "game" : appType);
+    BindText(stmt, 4, nowUtc);
+    const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+std::vector<ProductWishlistBalance> Database::QueryWishlistBalanceRowsForDate(
+    const std::string& date) {
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db_,
+            "SELECT p.app_id, p.display_name, "
+            "COALESCE(w.wishlist_balance, 0) AS balance "
+            "FROM products p "
+            "LEFT JOIN daily_app_wishlist w "
+            "  ON w.app_id = p.app_id AND w.financial_date = ? "
+            "ORDER BY balance DESC, p.display_name COLLATE NOCASE;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        return {};
+    }
+    BindText(stmt, 1, date);
+    auto rows = RunWishlistBalanceQuery(stmt);
+    sqlite3_finalize(stmt);
+    return rows;
+}
+
+std::vector<ProductWishlistBalance> Database::QueryWishlistBalanceRowsForRange(
+    const std::string& startDate, const std::string& endDate) {
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db_,
+            "SELECT p.app_id, p.display_name, "
+            "SUM(w.wishlist_balance) AS balance "
+            "FROM daily_app_wishlist w "
+            "JOIN products p ON p.app_id = w.app_id "
+            "WHERE w.financial_date BETWEEN ? AND ? "
+            "GROUP BY p.app_id, p.display_name "
+            "ORDER BY balance DESC, p.display_name COLLATE NOCASE;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        return {};
+    }
+    BindText(stmt, 1, startDate);
+    BindText(stmt, 2, endDate);
+    auto rows = RunWishlistBalanceQuery(stmt);
+    sqlite3_finalize(stmt);
+    return rows;
+}
+
+std::vector<ProductWishlistBalance> Database::QueryWishlistBalanceRowsLifetime() {
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(
+            db_,
+            "SELECT p.app_id, p.display_name, "
+            "SUM(w.wishlist_balance) AS balance "
+            "FROM daily_app_wishlist w "
+            "JOIN products p ON p.app_id = w.app_id "
+            "GROUP BY p.app_id, p.display_name "
+            "ORDER BY balance DESC, p.display_name COLLATE NOCASE;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        return {};
+    }
+    auto rows = RunWishlistBalanceQuery(stmt);
+    sqlite3_finalize(stmt);
+    return rows;
 }
 
 }  // namespace storage

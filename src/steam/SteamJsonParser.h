@@ -28,4 +28,16 @@ ParseResult ParseChangedDates(const std::string& json, ChangedDates& out);
 ParseResult ParseDetailedSalesPage(const std::string& json,
                                    DetailedSalesPage& out);
 
+// Parses a GetAppWishlistReporting response. A response for an out-of-range
+// date is valid and carries only app_min_date (wishlist_summary absent).
+ParseResult ParseAppWishlistReporting(const std::string& json,
+                                      AppWishlistReport& out);
+
+// Parses a GetPartnerAppListForWebAPIKey response. Unlike every other call in
+// this app, the payload is the classic Steam Web API shape -
+// {"applist":{"apps":{"app":[...]}}} - not {"response": {...}}. A missing or
+// empty "app" array is valid (e.g. an account with no DLC).
+ParseResult ParseGetPartnerAppList(const std::string& json,
+                                   std::vector<PartnerApp>& out);
+
 }  // namespace steam

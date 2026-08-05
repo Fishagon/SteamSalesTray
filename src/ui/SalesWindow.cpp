@@ -1,8 +1,10 @@
 #include "ui/SalesWindow.h"
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <commctrl.h>
+#include <shlwapi.h>
 #include <windowsx.h>
 
 #include "platform/StringUtil.h"
@@ -13,6 +15,7 @@
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "shlwapi.lib")
 
 namespace ui {
 
@@ -23,8 +26,33 @@ constexpr int kBtnW = 82;
 constexpr int kBtnH = 26;
 constexpr int kComboW = 150;
 constexpr int kRowTop = 40;
+constexpr int kTotalW = 180;
 
-constexpr int kDefaultColWidths[3] = {230, 90, 90};
+constexpr int kDefaultColWidths[4] = {200, 80, 70, 90};
+constexpr int kColumnCount = 4;
+
+// ListView group ids (Released/DLC/Unreleased grouping).
+constexpr int kGroupReleased = 0;
+constexpr int kGroupDlc = 1;
+constexpr int kGroupUnreleased = 2;
+
+// Formats a net wishlist balance with an explicit "+" for positive values;
+// FormatThousands already renders negatives with a "-" sign.
+std::wstring FormatSigned(std::int64_t value) {
+    if (value > 0) {
+        return L"+" + platform::FormatThousands(value);
+    }
+    return platform::FormatThousands(value);
+}
+
+// Demo and Playtest builds are just marketing copies of a real title with no
+// sales/wishlist signal of their own that isn't already reflected in the base
+// game, so they're noise in this list - hide by name rather than app_type
+// since Steam's Playtest type ("beta") isn't even in its own documented list.
+bool IsHiddenBuild(const std::wstring& displayName) {
+    return ::StrStrIW(displayName.c_str(), L"demo") != nullptr ||
+           ::StrStrIW(displayName.c_str(), L"playtest") != nullptr;
+}
 
 std::wstring RelativeUpdated(const std::string& lastSyncUtc) {
     if (lastSyncUtc.empty()) {
@@ -138,10 +166,32 @@ void SalesWindow::CreateChildren() {
     ListView_SetExtendedListViewStyle(
         list_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
 
+    // Group the list into Released / DLC / Unreleased sections - the sales
+    // pipeline alone never surfaces DLC or pre-release titles (see
+    // SalesSyncService::SyncKnownApps), so this is the only place that
+    // distinction shows up.
+    ListView_EnableGroupView(list_, TRUE);
+    auto insertGroup = [&](int id, const wchar_t* title) {
+        LVGROUP group = {};
+        group.cbSize = sizeof(group);
+        group.mask = LVGF_HEADER | LVGF_GROUPID;
+        group.pszHeader = const_cast<wchar_t*>(title);
+        group.iGroupId = id;
+        ListView_InsertGroup(list_, -1, &group);
+    };
+    insertGroup(kGroupReleased, L"Released");
+    insertGroup(kGroupDlc, L"DLC");
+    insertGroup(kGroupUnreleased, L"Unreleased (Wishlist Only)");
+
     total_ = ::CreateWindowExW(
         0, L"STATIC", L"Total: 0", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP,
         0, 0, 10, 10, hwnd_, reinterpret_cast<HMENU>(IDC_SALES_TOTAL),
         instance_, nullptr);
+
+    wishlist_ = ::CreateWindowExW(
+        0, L"STATIC", L"Wishlist Balance: 0",
+        WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 10, 10, hwnd_,
+        reinterpret_cast<HMENU>(IDC_SALES_WISHLIST), instance_, nullptr);
 
     btnRefresh_ = ::CreateWindowExW(
         0, L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0,
@@ -156,8 +206,8 @@ void SalesWindow::CreateChildren() {
         0, 0, kBtnW, kBtnH, hwnd_, reinterpret_cast<HMENU>(IDC_SALES_CLOSE),
         instance_, nullptr);
 
-    HWND controls[] = {combo_,       status_,      list_,     total_,
-                       btnRefresh_,  btnSettings_, btnClose_};
+    HWND controls[] = {combo_,      status_,      list_,       total_,
+                       wishlist_,   btnRefresh_,  btnSettings_, btnClose_};
     for (HWND c : controls) {
         if (c && font_) {
             ::SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
@@ -165,8 +215,9 @@ void SalesWindow::CreateChildren() {
     }
 
     // ListView columns.
-    const wchar_t* headers[3] = {L"Product", L"App ID", L"Units"};
-    for (int i = 0; i < 3; ++i) {
+    const wchar_t* headers[kColumnCount] = {L"Product", L"App ID", L"Units",
+                                            L"WL Balance"};
+    for (int i = 0; i < kColumnCount; ++i) {
         LVCOLUMNW col = {};
         col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT | LVCF_SUBITEM;
         col.fmt = (i == 0) ? LVCFMT_LEFT : LVCFMT_RIGHT;
@@ -241,7 +292,11 @@ void SalesWindow::LayoutChildren() {
     ::MoveWindow(btnRefresh_, refreshX, buttonsY, kBtnW, kBtnH, TRUE);
     ::MoveWindow(btnSettings_, settingsX, buttonsY, kBtnW, kBtnH, TRUE);
     ::MoveWindow(btnClose_, closeX, buttonsY, kBtnW, kBtnH, TRUE);
-    ::MoveWindow(total_, m, buttonsY + 5, refreshX - m - 8, 18, TRUE);
+    ::MoveWindow(total_, m, buttonsY + 5, kTotalW, 18, TRUE);
+    const int wishlistX = m + kTotalW + 12;
+    const int wishlistW = (refreshX - 8) - wishlistX;
+    ::MoveWindow(wishlist_, wishlistX, buttonsY + 5,
+                 wishlistW > 0 ? wishlistW : 0, 18, TRUE);
 
     const int listTop = m + kRowTop - 6;
     const int listHeight = (buttonsY - 8) - listTop;
@@ -255,50 +310,104 @@ void SalesWindow::ReloadList() {
     }
     ListView_DeleteAllItems(list_);
 
-    std::vector<storage::ProductUnits> rows;
+    // Per-app period data, looked up by appId while building rows below.
+    std::vector<storage::ProductUnits> unitsRows;
+    std::vector<storage::ProductWishlistBalance> wishlistRows;
     switch (CurrentPeriod()) {
         case SalesPeriod::Today:
-            rows = db_->QueryDate(platform::SteamToday());
+            unitsRows = db_->QueryDate(platform::SteamToday());
+            wishlistRows =
+                db_->QueryWishlistBalanceRowsForDate(platform::SteamToday());
             break;
         case SalesPeriod::Yesterday:
-            rows = db_->QueryDate(platform::SteamDateDaysAgo(1));
+            unitsRows = db_->QueryDate(platform::SteamDateDaysAgo(1));
+            wishlistRows = db_->QueryWishlistBalanceRowsForDate(
+                platform::SteamDateDaysAgo(1));
             break;
         case SalesPeriod::Last7Days:
-            rows = db_->QueryRange(platform::SteamDateDaysAgo(6),
-                                   platform::SteamToday());
+            unitsRows = db_->QueryRange(platform::SteamDateDaysAgo(6),
+                                        platform::SteamToday());
+            wishlistRows = db_->QueryWishlistBalanceRowsForRange(
+                platform::SteamDateDaysAgo(6), platform::SteamToday());
             break;
         case SalesPeriod::Last30Days:
-            rows = db_->QueryRange(platform::SteamDateDaysAgo(29),
-                                   platform::SteamToday());
+            unitsRows = db_->QueryRange(platform::SteamDateDaysAgo(29),
+                                        platform::SteamToday());
+            wishlistRows = db_->QueryWishlistBalanceRowsForRange(
+                platform::SteamDateDaysAgo(29), platform::SteamToday());
             break;
         case SalesPeriod::Lifetime:
-            rows = db_->QueryLifetime();
+            unitsRows = db_->QueryLifetime();
+            wishlistRows = db_->QueryWishlistBalanceRowsLifetime();
             break;
     }
 
+    std::unordered_map<std::int64_t, std::int64_t> unitsByApp;
+    for (const storage::ProductUnits& row : unitsRows) {
+        unitsByApp[row.appId] = row.units;
+    }
+    std::unordered_map<std::int64_t, std::int64_t> wishlistByApp;
+    for (const storage::ProductWishlistBalance& row : wishlistRows) {
+        wishlistByApp[row.appId] = row.balance;
+    }
+
+    // The driving list is every known app (GetAllProducts), not just the ones
+    // with sales this period - a DLC or unreleased title with 0 units still
+    // needs a row so its wishlist balance is visible. Demo/Playtest builds and
+    // rows with nothing to report this period (0 units and 0 balance) are
+    // filtered out entirely (row and totals both), so the two stay consistent
+    // with what's actually visible.
     std::int64_t total = 0;
+    std::int64_t wishlistBalance = 0;
     int index = 0;
-    for (const storage::ProductUnits& row : rows) {
+    for (const storage::ProductInfo& product : db_->GetAllProducts()) {
+        if (IsHiddenBuild(product.displayName)) {
+            continue;
+        }
+        const int groupId = (product.appType == "dlc")
+                                ? kGroupDlc
+                                : (product.everSold ? kGroupReleased
+                                                    : kGroupUnreleased);
+        const auto unitsIt = unitsByApp.find(product.appId);
+        const std::int64_t units =
+            unitsIt != unitsByApp.end() ? unitsIt->second : 0;
+        const auto wishlistIt = wishlistByApp.find(product.appId);
+        const std::int64_t balance =
+            wishlistIt != wishlistByApp.end() ? wishlistIt->second : 0;
+        if (units == 0 && balance == 0) {
+            continue;  // nothing to report for this period - just noise
+        }
+
         LVITEMW item = {};
-        item.mask = LVIF_TEXT;
+        item.mask = LVIF_TEXT | LVIF_GROUPID;
         item.iItem = index;
         item.iSubItem = 0;
-        item.pszText = const_cast<wchar_t*>(row.displayName.c_str());
+        item.pszText = const_cast<wchar_t*>(product.displayName.c_str());
+        item.iGroupId = groupId;
         const int inserted = ListView_InsertItem(list_, &item);
 
-        const std::wstring appId = std::to_wstring(row.appId);
+        const std::wstring appId = std::to_wstring(product.appId);
         ListView_SetItemText(list_, inserted, 1,
                              const_cast<wchar_t*>(appId.c_str()));
-        const std::wstring units = platform::FormatThousands(row.units);
+        const std::wstring unitsText = platform::FormatThousands(units);
         ListView_SetItemText(list_, inserted, 2,
-                             const_cast<wchar_t*>(units.c_str()));
-        total += row.units;
+                             const_cast<wchar_t*>(unitsText.c_str()));
+        const std::wstring wishlistText = FormatSigned(balance);
+        ListView_SetItemText(list_, inserted, 3,
+                             const_cast<wchar_t*>(wishlistText.c_str()));
+
+        total += units;
+        wishlistBalance += balance;
         ++index;
     }
 
     const std::wstring totalText =
         L"Total: " + platform::FormatThousands(total);
     ::SetWindowTextW(total_, totalText.c_str());
+
+    const std::wstring wishlistText =
+        L"Wishlist Balance: " + FormatSigned(wishlistBalance);
+    ::SetWindowTextW(wishlist_, wishlistText.c_str());
 
     UpdateStatusLine();
 }
@@ -331,7 +440,7 @@ void SalesWindow::SaveColumnWidths() {
     if (!list_) {
         return;
     }
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < kColumnCount; ++i) {
         storage::SettingsStore::SetSalesColumnWidth(
             i, ListView_GetColumnWidth(list_, i));
     }

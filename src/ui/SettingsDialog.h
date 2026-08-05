@@ -30,6 +30,9 @@ struct SettingsOutcome {
     bool cacheCleared = false;     // user cleared the local sales cache
     bool preferencesChanged = false;  // interval/notify/startup changed (sync)
     bool displayChanged = false;      // display-only pref changed (no resync)
+    // Publisher key (GetPartnerAppListForWebAPIKey - DLC/Unreleased detection)
+    // changed, stored/removed separately from the Financial key above.
+    bool publisherKeyChanged = false;
 };
 
 // Shows the modal settings dialog. `validator` may be empty (Test Connection

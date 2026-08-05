@@ -49,6 +49,13 @@ std::wstring GetApiKeyPath() {
     return JoinData(L"api-key.dat");
 }
 
+// The Financial API Group key (GetApiKeyPath) has no app/user permissions and
+// cannot call ISteamApps/GetPartnerAppListForWebAPIKey (Steam returns 403) -
+// that needs a normal publisher Web API key, stored separately.
+std::wstring GetPublisherApiKeyPath() {
+    return JoinData(L"publisher-api-key.dat");
+}
+
 std::wstring GetDatabasePath() {
     return JoinData(L"sales.db");
 }

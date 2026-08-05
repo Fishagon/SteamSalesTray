@@ -12,9 +12,10 @@ namespace platform {
 std::wstring GetDataDirectory();
 
 // Full paths to individual files (each rooted at GetDataDirectory()).
-std::wstring GetApiKeyPath();     // api-key.dat
-std::wstring GetDatabasePath();   // sales.db
-std::wstring GetLogPath();        // app.log
+std::wstring GetApiKeyPath();           // api-key.dat
+std::wstring GetPublisherApiKeyPath();  // publisher-api-key.dat
+std::wstring GetDatabasePath();         // sales.db
+std::wstring GetLogPath();              // app.log
 
 // Absolute path to the running executable (for the startup Run entry).
 std::wstring GetExecutablePath();

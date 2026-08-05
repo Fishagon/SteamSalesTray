@@ -74,6 +74,7 @@ private:
     HWND status_ = nullptr;
     HWND list_ = nullptr;
     HWND total_ = nullptr;
+    HWND wishlist_ = nullptr;
     HWND btnRefresh_ = nullptr;
     HWND btnSettings_ = nullptr;
     HWND btnClose_ = nullptr;

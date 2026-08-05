@@ -287,7 +287,8 @@ void App::OnSettings() {
     // Apply the outcome to the running worker.
     if (outcome.cacheCleared) {
         sync_.RequestClearCache();  // clears DB + triggers a full resync
-    } else if (outcome.keyChanged || outcome.preferencesChanged) {
+    } else if (outcome.keyChanged || outcome.preferencesChanged ||
+              outcome.publisherKeyChanged) {
         sync_.NotifySettingsChanged();  // re-read interval, resync with new key
     }
 

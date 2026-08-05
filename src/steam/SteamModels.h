@@ -37,4 +37,30 @@ struct DetailedSalesPage {
     bool hasMaxId = false;
 };
 
+// wishlist_summary block from GetAppWishlistReporting.
+struct WishlistActionSummary {
+    std::int64_t adds = 0;
+    std::int64_t deletes = 0;
+    std::int64_t purchases = 0;
+    std::int64_t gifts = 0;
+};
+
+// Result of GetAppWishlistReporting for one (appid, date).
+struct AppWishlistReport {
+    std::int64_t appId = 0;
+    std::string date;
+    WishlistActionSummary summary;
+    // Earliest date Steam has wishlist data for this app; empty if unknown.
+    std::string appMinDate;
+};
+
+// One entry from ISteamApps/GetPartnerAppListForWebAPIKey - every app tied to
+// the account, regardless of sales history (so it's the only way to discover
+// DLC and unreleased titles).
+struct PartnerApp {
+    std::int64_t appId = 0;
+    std::string appType;  // "game", "dlc", "application", "tool", "demo", "music"
+    std::string appName;  // UTF-8
+};
+
 }  // namespace steam

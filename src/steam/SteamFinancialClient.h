@@ -56,6 +56,19 @@ public:
         const security::SecureString& keyUtf8, const std::string& date,
         std::vector<DetailedSalesRecord>& out);
 
+    // GetAppWishlistReporting: wishlist adds/deletes/purchases/gifts for one
+    // app on one date.
+    FinancialResult GetAppWishlistReporting(const security::SecureString& keyUtf8,
+                                            std::int64_t appId,
+                                            const std::string& date,
+                                            AppWishlistReport& out);
+
+    // ISteamApps/GetPartnerAppListForWebAPIKey: every app tied to the account
+    // (game/dlc/application/tool/demo/music), independent of sales history.
+    // Different interface than the rest of this client, but same host/key.
+    FinancialResult GetAppList(const security::SecureString& keyUtf8,
+                              std::vector<PartnerApp>& out);
+
 private:
     network::WinHttpClient http_;
 };
