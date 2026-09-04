@@ -21,19 +21,19 @@ std::vector<storage::DailyProductRow> AggregateDate(
             rec.packageSaleType != kPackageSaleSteam) {
             continue;
         }
-        if (rec.primaryAppId == 0) {
+        if (rec.appId == 0) {
             continue;  // no stable product identity
         }
 
-        auto it = indexByApp.find(rec.primaryAppId);
+        auto it = indexByApp.find(rec.appId);
         if (it == indexByApp.end()) {
             storage::DailyProductRow row;
-            row.appId = rec.primaryAppId;
+            row.appId = rec.appId;
             row.displayName = rec.primaryAppName;
             row.netUnitsSold = rec.netUnitsSold;
             row.grossUnitsSold = rec.grossUnitsSold;
             row.grossUnitsReturned = rec.grossUnitsReturned;
-            indexByApp.emplace(rec.primaryAppId, rows.size());
+            indexByApp.emplace(rec.appId, rows.size());
             rows.push_back(std::move(row));
         } else {
             storage::DailyProductRow& row = rows[it->second];

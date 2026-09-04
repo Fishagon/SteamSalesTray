@@ -24,7 +24,7 @@ static DetailedSalesRecord Rec(const char* type, const char* sale,
     DetailedSalesRecord r;
     r.lineItemType = type;
     r.packageSaleType = sale;
-    r.primaryAppId = app;
+    r.appId = app;
     r.primaryAppName = name;
     r.netUnitsSold = net;
     r.grossUnitsSold = gross;

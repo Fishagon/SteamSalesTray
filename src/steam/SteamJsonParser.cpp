@@ -14,9 +14,9 @@ namespace {
 //
 // Confirmed against a live IPartnerFinancialsService/GetDetailedSales/v001
 // response: line-item records live under response.results; each Steam package
-// row carries primary_appid, net/gross_units_sold, gross_units_returned. There
-// is no per-record app name - names come from the response.app_info lookup
-// (an array of {appid, app_name}).
+// row carries appid, primary_appid, net/gross_units_sold,
+// gross_units_returned. There is no per-record app name - names come from the
+// response.app_info lookup (an array of {appid, app_name}).
 // ---------------------------------------------------------------------------
 constexpr const char* kResponse = "response";
 
@@ -33,6 +33,9 @@ constexpr const char* kRecordArrayKeys[] = {"results", "sales", "line_items"};
 // Record fields
 constexpr const char* kLineItemType = "line_item_type";
 constexpr const char* kPackageSaleType = "package_sale_type";
+// The actual app/DLC being sold. Distinct from primary_appid, which is only
+// the revenue-share attribution target (often the base game for a DLC sale).
+constexpr const char* kAppId = "appid";
 constexpr const char* kPrimaryAppId = "primary_appid";
 constexpr const char* kPrimaryAppName = "primary_app_name";  // legacy/fallback
 constexpr const char* kNetUnitsSold = "net_units_sold";
@@ -237,6 +240,7 @@ ParseResult ParseDetailedSalesPage(const std::string& json,
             DetailedSalesRecord rec;
             rec.lineItemType = GetStr(item, kLineItemType);
             rec.packageSaleType = GetStr(item, kPackageSaleType);
+            rec.appId = GetInt64(item, kAppId);
             rec.primaryAppId = GetInt64(item, kPrimaryAppId);
             rec.primaryAppName = GetStr(item, kPrimaryAppName);
             rec.netUnitsSold = GetInt64(item, kNetUnitsSold);
@@ -244,7 +248,7 @@ ParseResult ParseDetailedSalesPage(const std::string& json,
             rec.grossUnitsReturned = GetInt64(item, kGrossUnitsReturned);
             // Resolve the name from app_info when the record has none.
             if (rec.primaryAppName.empty()) {
-                auto it = appNames.find(rec.primaryAppId);
+                auto it = appNames.find(rec.appId);
                 if (it != appNames.end()) {
                     rec.primaryAppName = it->second;
                 }
