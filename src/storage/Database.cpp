@@ -555,6 +555,22 @@ bool Database::UpsertKnownApp(std::int64_t appId,
     return ok;
 }
 
+std::unordered_map<std::string, std::int64_t> Database::GetAppIdsByName() {
+    std::unordered_map<std::string, std::int64_t> byName;
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_,
+                           "SELECT display_name, app_id FROM products "
+                           "WHERE display_name <> '';",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        return byName;
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        byName[ColumnText(stmt, 0)] = sqlite3_column_int64(stmt, 1);
+    }
+    sqlite3_finalize(stmt);
+    return byName;
+}
+
 std::vector<ProductWishlistBalance> Database::QueryWishlistBalanceRowsForDate(
     const std::string& date) {
     sqlite3_stmt* stmt = nullptr;

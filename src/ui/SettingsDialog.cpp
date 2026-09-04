@@ -32,6 +32,30 @@ constexpr std::array<IntervalOption, 6> kIntervals = {{
     {storage::RefreshInterval::Manual, L"Manual only"},
 }};
 
+constexpr int kMinResyncDays = 1;
+constexpr int kMaxResyncDays = 180;
+
+// Manual digit parse (no exceptions, matching this codebase's style).
+// Returns false for empty/non-numeric input or a value outside the allowed
+// [kMinResyncDays, kMaxResyncDays] range.
+bool ParseResyncDays(const std::wstring& text, int& days) {
+    if (text.empty() || text.size() > 3) {
+        return false;
+    }
+    int value = 0;
+    for (wchar_t c : text) {
+        if (c < L'0' || c > L'9') {
+            return false;
+        }
+        value = value * 10 + (c - L'0');
+    }
+    if (value < kMinResyncDays || value > kMaxResyncDays) {
+        return false;
+    }
+    days = value;
+    return true;
+}
+
 std::wstring TrimWhitespace(const std::wstring& s) {
     const wchar_t* ws = L" \t\r\n\f\v";
     const size_t begin = s.find_first_not_of(ws);
@@ -131,6 +155,9 @@ void OnInitDialog(HWND dlg, DialogState* state) {
     ::SendDlgItemMessageW(dlg, IDC_EDIT_PUBLISHER_APIKEY, EM_SETLIMITTEXT, 512,
                          0);
 
+    ::SendDlgItemMessageW(dlg, IDC_EDIT_RESYNC_DAYS, EM_SETLIMITTEXT, 3, 0);
+    ::SetDlgItemTextW(dlg, IDC_EDIT_RESYNC_DAYS, L"45");
+
     SetKeyStatusLabel(dlg, *state);
     SetPublisherKeyStatusLabel(dlg, *state);
 
@@ -198,6 +225,35 @@ void OnClearCache(HWND dlg, DialogState* state) {
     state->outcome.cacheCleared = true;
     ::SetDlgItemTextW(dlg, IDC_STATIC_TESTRESULT,
                       L"Local sales cache will be cleared and re-synced.");
+}
+
+void OnForceResync(HWND dlg, DialogState* state) {
+    int days = 0;
+    if (!ParseResyncDays(GetEditText(::GetDlgItem(dlg, IDC_EDIT_RESYNC_DAYS)),
+                         days)) {
+        ::SetDlgItemTextW(
+            dlg, IDC_STATIC_TESTRESULT,
+            (L"Enter a number of days between " +
+             std::to_wstring(kMinResyncDays) + L" and " +
+             std::to_wstring(kMaxResyncDays) + L".").c_str());
+        return;
+    }
+    const std::wstring prompt =
+        L"Re-fetch the last " + std::to_wstring(days) +
+        L" day(s) of sales directly from Steam?\n\n"
+        L"This overwrites local data for those dates only - other dates are "
+        L"unaffected.";
+    if (::MessageBoxW(dlg, prompt.c_str(), L"Force Resync",
+                      MB_YESNO | MB_ICONWARNING) != IDYES) {
+        return;
+    }
+    // The actual resync is performed by the sync worker after the dialog
+    // closes (see App::OnSettings), same pattern as Clear Cache above.
+    state->outcome.forceResyncDays = days;
+    ::SetDlgItemTextW(
+        dlg, IDC_STATIC_TESTRESULT,
+        (L"Will resync the last " + std::to_wstring(days) +
+         L" day(s) after you close Settings.").c_str());
 }
 
 void OnRemoveKey(HWND dlg, DialogState* state) {
@@ -373,6 +429,9 @@ INT_PTR CALLBACK DialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam) {
                     return TRUE;
                 case IDC_BUTTON_CLEARCACHE:
                     OnClearCache(dlg, state);
+                    return TRUE;
+                case IDC_BUTTON_FORCERESYNC:
+                    OnForceResync(dlg, state);
                     return TRUE;
                 case IDC_BUTTON_REMOVEKEY:
                     OnRemoveKey(dlg, state);

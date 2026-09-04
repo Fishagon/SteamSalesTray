@@ -27,6 +27,11 @@ constexpr long long kStartupFreshnessSeconds = 300;  // 5 minutes
 // so one wishlist pass can't turn a sync into a multi-minute API crawl.
 constexpr int kWishlistBackfillStepsPerCycle = 45;
 
+// Sane ceiling for a force-resync request, mirroring the UI's own bound
+// (SettingsDialog.cpp) so a malformed/future caller can't request a crawl of
+// the entire sales history.
+constexpr int kMaxForceResyncDays = 180;
+
 int IntervalMinutes() {
     return static_cast<int>(storage::SettingsStore::GetRefreshInterval());
 }
@@ -134,6 +139,12 @@ void SalesSyncService::RequestClearCache() {
     if (manualEvent_) ::SetEvent(manualEvent_);
 }
 
+void SalesSyncService::RequestForceResync(int days) {
+    days = std::clamp(days, 1, kMaxForceResyncDays);
+    forceResyncDaysRequested_.store(days);
+    if (manualEvent_) ::SetEvent(manualEvent_);
+}
+
 AppStatus SalesSyncService::GetStatus() const {
     std::lock_guard<std::mutex> lock(statusMutex_);
     return status_;
@@ -228,6 +239,15 @@ void SalesSyncService::RunSynchronization(storage::Database& db,
         return;
     }
 
+    // Refresh the app list before any aggregation: it is the only source of
+    // DLC appids, and sale attribution resolves package names against it.
+    SyncKnownApps(db, client);
+
+    if (const int resyncDays = forceResyncDaysRequested_.exchange(0);
+        resyncDays > 0) {
+        ForceResyncRecentDays(db, client, key, resyncDays);
+    }
+
     const std::string hwm = db.GetChangedDatesHighwatermark();
     const bool initial = (hwm == "0" || hwm.empty());
     const bool notifyEnabled = storage::SettingsStore::GetNotifyOnNewUnits();
@@ -304,6 +324,8 @@ void SalesSyncService::RunSynchronization(storage::Database& db,
         before = LifetimeSnapshot(db);
     }
 
+    const AppIdsByName appIdsByName = db.GetAppIdsByName();
+
     for (const std::string& date : toProcess) {
         std::vector<steam::DetailedSalesRecord> records;
         steam::FinancialResult pr =
@@ -320,7 +342,8 @@ void SalesSyncService::RunSynchronization(storage::Database& db,
             return;
         }
 
-        std::vector<storage::DailyProductRow> rows = AggregateDate(records);
+        std::vector<storage::DailyProductRow> rows =
+            AggregateDate(records, appIdsByName);
         if (!db.ReplaceDate(date, rows, now)) {
             SetStatus(SyncStatus::DatabaseError, L"Failed to save sales data.");
             db.SetLastError("database write failed");
@@ -401,11 +424,46 @@ void SalesSyncService::SyncKnownApps(storage::Database& db,
     }
 }
 
+void SalesSyncService::ForceResyncRecentDays(
+    storage::Database& db, steam::SteamFinancialClient& client,
+    const security::SecureString& key, int days) {
+    platform::Log::Info(L"Sync", L"Force resync starting for last " +
+                                     std::to_wstring(days) + L" day(s)");
+    const std::string now = platform::UtcNowIso8601();
+    const AppIdsByName appIdsByName = db.GetAppIdsByName();
+    int replaced = 0;
+    for (int daysAgo = days - 1; daysAgo >= 0; --daysAgo) {
+        const std::string date = platform::SteamDateDaysAgo(daysAgo);
+
+        std::vector<steam::DetailedSalesRecord> records;
+        const steam::FinancialResult pr =
+            client.GetAllDetailedSalesForDate(key, date, records);
+        if (!pr.ok()) {
+            platform::Log::Warn(
+                L"Sync", L"Force resync: GetDetailedSales failed for " +
+                             platform::Utf8ToWide(date) + L", httpStatus=" +
+                             std::to_wstring(pr.httpStatus));
+            continue;  // best-effort: one bad date shouldn't stop the range
+        }
+
+        const std::vector<storage::DailyProductRow> rows =
+            AggregateDate(records, appIdsByName);
+        if (!db.ReplaceDate(date, rows, now)) {
+            platform::Log::Warn(L"Sync",
+                                L"Force resync: database write failed for " +
+                                    platform::Utf8ToWide(date));
+            continue;
+        }
+        ++replaced;
+    }
+    platform::Log::Info(L"Sync", L"Force resync completed, replaced " +
+                                     std::to_wstring(replaced) + L" of " +
+                                     std::to_wstring(days) + L" date(s)");
+}
+
 void SalesSyncService::SyncWishlists(storage::Database& db,
                                      steam::SteamFinancialClient& client,
                                      const security::SecureString& key) {
-    SyncKnownApps(db, client);
-
     const std::string today = platform::SteamToday();
     const std::string yesterday = platform::SteamDateDaysAgo(1);
 

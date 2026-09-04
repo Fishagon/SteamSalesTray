@@ -33,6 +33,10 @@ struct SettingsOutcome {
     // Publisher key (GetPartnerAppListForWebAPIKey - DLC/Unreleased detection)
     // changed, stored/removed separately from the Financial key above.
     bool publisherKeyChanged = false;
+    // > 0 if the user requested a force resync of this many recent days
+    // (re-fetches straight from Steam regardless of the changed-dates
+    // watermark, overwriting only those dates' local rows).
+    int forceResyncDays = 0;
 };
 
 // Shows the modal settings dialog. `validator` may be empty (Test Connection

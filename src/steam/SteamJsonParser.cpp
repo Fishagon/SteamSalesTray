@@ -12,11 +12,12 @@ namespace {
 // ---------------------------------------------------------------------------
 // Steam Financial API field names.
 //
-// Confirmed against a live IPartnerFinancialsService/GetDetailedSales/v001
-// response: line-item records live under response.results; each Steam package
-// row carries appid, primary_appid, net/gross_units_sold,
-// gross_units_returned. There is no per-record app name - names come from the
-// response.app_info lookup (an array of {appid, app_name}).
+// Confirmed against live IPartnerFinancialsService/GetDetailedSales/v001
+// responses: line-item records live under response.results; every row carries
+// packageid + primary_appid, and Steam-type rows add net/gross_units_sold and
+// gross_units_returned. Rows carry no names and no appid at all - names come
+// from the response.package_info ({packageid, package_name}) and
+// response.app_info ({appid, app_name}) lookups.
 // ---------------------------------------------------------------------------
 constexpr const char* kResponse = "response";
 
@@ -33,9 +34,9 @@ constexpr const char* kRecordArrayKeys[] = {"results", "sales", "line_items"};
 // Record fields
 constexpr const char* kLineItemType = "line_item_type";
 constexpr const char* kPackageSaleType = "package_sale_type";
-// The actual app/DLC being sold. Distinct from primary_appid, which is only
-// the revenue-share attribution target (often the base game for a DLC sale).
-constexpr const char* kAppId = "appid";
+// The package actually sold - the only per-row identity that distinguishes a
+// DLC sale from its base game (primary_appid is the base game for both).
+constexpr const char* kPackageId = "packageid";
 constexpr const char* kPrimaryAppId = "primary_appid";
 constexpr const char* kPrimaryAppName = "primary_app_name";  // legacy/fallback
 constexpr const char* kNetUnitsSold = "net_units_sold";
@@ -46,6 +47,11 @@ constexpr const char* kGrossUnitsReturned = "gross_units_returned";
 constexpr const char* kAppInfo = "app_info";
 constexpr const char* kAppInfoAppId = "appid";
 constexpr const char* kAppInfoName = "app_name";
+
+// package_info lookup block: array of { packageid, package_name }.
+constexpr const char* kPackageInfo = "package_info";
+constexpr const char* kPackageInfoId = "packageid";
+constexpr const char* kPackageInfoName = "package_name";
 
 // GetAppWishlistReporting
 constexpr const char* kWishlistAppId = "appid";
@@ -220,6 +226,26 @@ ParseResult ParseDetailedSalesPage(const std::string& json,
         }
     }
 
+    // Build packageid -> package name from the package_info lookup block. This
+    // is what identifies a DLC sale: the rows themselves carry only a
+    // packageid, and a DLC package's primary_appid is its base game.
+    std::unordered_map<std::int64_t, std::string> packageNames;
+    yyjson_val* packageInfo = yyjson_obj_get(response, kPackageInfo);
+    if (packageInfo && yyjson_is_arr(packageInfo)) {
+        size_t i, n;
+        yyjson_val* entry;
+        yyjson_arr_foreach(packageInfo, i, n, entry) {
+            if (!yyjson_is_obj(entry)) {
+                continue;
+            }
+            const std::int64_t id = GetInt64(entry, kPackageInfoId);
+            std::string name = GetStr(entry, kPackageInfoName);
+            if (id != 0 && !name.empty()) {
+                packageNames[id] = std::move(name);
+            }
+        }
+    }
+
     // Locate the records array under the first matching candidate key.
     yyjson_val* records = nullptr;
     for (const char* key : kRecordArrayKeys) {
@@ -240,16 +266,21 @@ ParseResult ParseDetailedSalesPage(const std::string& json,
             DetailedSalesRecord rec;
             rec.lineItemType = GetStr(item, kLineItemType);
             rec.packageSaleType = GetStr(item, kPackageSaleType);
-            rec.appId = GetInt64(item, kAppId);
+            rec.packageId = GetInt64(item, kPackageId);
             rec.primaryAppId = GetInt64(item, kPrimaryAppId);
             rec.primaryAppName = GetStr(item, kPrimaryAppName);
             rec.netUnitsSold = GetInt64(item, kNetUnitsSold);
             rec.grossUnitsSold = GetInt64(item, kGrossUnitsSold);
             rec.grossUnitsReturned = GetInt64(item, kGrossUnitsReturned);
-            // Resolve the name from app_info when the record has none.
+            if (auto it = packageNames.find(rec.packageId);
+                it != packageNames.end()) {
+                rec.packageName = it->second;
+            }
+            // Resolve the base game's name from app_info when the record has
+            // none of its own.
             if (rec.primaryAppName.empty()) {
-                auto it = appNames.find(rec.appId);
-                if (it != appNames.end()) {
+                if (auto it = appNames.find(rec.primaryAppId);
+                    it != appNames.end()) {
                     rec.primaryAppName = it->second;
                 }
             }

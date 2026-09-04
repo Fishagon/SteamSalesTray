@@ -71,12 +71,12 @@ static void TestDetailedSales() {
         auto r = ParseDetailedSalesPage(
             R"({"response":{"max_id":"900","sales":[)"
             R"({"line_item_type":"Package","package_sale_type":"Steam",)"
-            R"("appid":480,"primary_appid":480,"primary_app_name":"git gud",)"
+            R"("packageid":480,"primary_appid":480,"primary_app_name":"git gud",)"
             R"("net_units_sold":2,"gross_units_sold":3,"gross_units_returned":1},)"
             R"({"line_item_type":"MicroTxn","package_sale_type":"Steam",)"
-            R"("appid":481,"primary_appid":481,"net_units_sold":99},)"
+            R"("packageid":481,"primary_appid":481,"net_units_sold":99},)"
             R"({"line_item_type":"Package","package_sale_type":"Retail",)"
-            R"("appid":482,"primary_appid":482,"net_units_sold":-3})"
+            R"("packageid":482,"primary_appid":482,"net_units_sold":-3})"
             R"(]}})",
             out);
         CHECK(r.ok(), "detailed page parses ok");
@@ -85,7 +85,7 @@ static void TestDetailedSales() {
         if (out.records.size() == 3) {
             CHECK(out.records[0].lineItemType == "Package" &&
                       out.records[0].packageSaleType == "Steam" &&
-                      out.records[0].appId == 480 &&
+                      out.records[0].packageId == 480 &&
                       out.records[0].primaryAppId == 480 &&
                       out.records[0].primaryAppName == "git gud" &&
                       out.records[0].netUnitsSold == 2 &&
@@ -101,13 +101,13 @@ static void TestDetailedSales() {
         auto r = ParseDetailedSalesPage(
             R"({"response":{"max_id":1234567890123,"line_items":[)"
             R"({"line_item_type":"Package","package_sale_type":"Steam",)"
-            R"("appid":"730","primary_appid":"730","net_units_sold":"-5"}]}})",
+            R"("packageid":"730","primary_appid":"730","net_units_sold":"-5"}]}})",
             out);
         CHECK(r.ok() && out.records.size() == 1, "alternate 'line_items' key");
         CHECK(out.maxId == "1234567890123", "numeric max_id -> string");
         if (out.records.size() == 1) {
-            CHECK(out.records[0].appId == 730,
-                  "numeric-string app id parsed");
+            CHECK(out.records[0].packageId == 730,
+                  "numeric-string package id parsed");
             CHECK(out.records[0].netUnitsSold == -5,
                   "numeric-string negative net parsed");
         }
@@ -119,51 +119,76 @@ static void TestDetailedSales() {
               "empty page valid, cursor read");
     }
     {
-        // Real API shape: records under "results", no per-record app name,
-        // names resolved from the "app_info" lookup array.
+        // Real API shape, copied from a live response: records under
+        // "results", no per-record names, no appid at all. Identity is
+        // packageid (named via package_info); primary_appid names the base
+        // game via app_info.
         DetailedSalesPage out;
         auto r = ParseDetailedSalesPage(
             R"({"response":{"max_id":"5","app_info":[)"
             R"({"appid":1490570,"app_name":"git gud"}],)"
+            R"("package_info":[{"packageid":525437,"package_name":"git gud"}],)"
             R"("results":[)"
             R"({"line_item_type":"Package","package_sale_type":"Steam",)"
-            R"("appid":1490570,"primary_appid":1490570,"net_units_sold":2,)"
+            R"("packageid":525437,"primary_appid":1490570,"net_units_sold":2,)"
             R"("gross_units_sold":3,"gross_units_returned":1})"
             R"(]}})",
             out);
         CHECK(r.ok() && out.records.size() == 1, "real-shape results parsed");
         if (out.records.size() == 1) {
-            CHECK(out.records[0].appId == 1490570 &&
+            CHECK(out.records[0].packageId == 525437 &&
+                      out.records[0].primaryAppId == 1490570 &&
                       out.records[0].netUnitsSold == 2,
                   "real-shape metric fields parsed");
+            CHECK(out.records[0].packageName == "git gud",
+                  "package name resolved from package_info");
             CHECK(out.records[0].primaryAppName == "git gud",
-                  "name resolved from app_info lookup");
+                  "base game name resolved from app_info");
         }
     }
     {
-        // DLC package sale: Steam sets primary_appid to the base game (for
-        // revenue-share accrual) while appid identifies the DLC actually
-        // sold. The DLC's own name is looked up via appid, not primary_appid.
+        // DLC package sale, verbatim shape from a live response: the row's
+        // primary_appid is the BASE GAME (revenue-share target) and there is
+        // no appid, so the package name is the only thing distinguishing this
+        // from a base-game sale.
         DetailedSalesPage out;
         auto r = ParseDetailedSalesPage(
             R"({"response":{"max_id":"6","app_info":[)"
-            R"({"appid":1490570,"app_name":"git gud"},)"
-            R"({"appid":5118140,"app_name":"git gud - Branch Strategy Bootcamp"})"
-            R"(],"results":[)"
+            R"({"appid":1490570,"app_name":"git gud"}],)"
+            R"("package_info":[{"packageid":1772777,)"
+            R"("package_name":"git gud - Branch Strategy Bootcamp"}],)"
+            R"("results":[)"
             R"({"line_item_type":"Package","package_sale_type":"Steam",)"
-            R"("appid":5118140,"primary_appid":1490570,"net_units_sold":1,)"
+            R"("packageid":1772777,"primary_appid":1490570,"net_units_sold":1,)"
             R"("gross_units_sold":1,"gross_units_returned":0})"
             R"(]}})",
             out);
         CHECK(r.ok() && out.records.size() == 1, "DLC sale record parsed");
         if (out.records.size() == 1) {
-            CHECK(out.records[0].appId == 5118140,
-                  "appid is the DLC, not the revenue-share primary_appid");
-            CHECK(out.records[0].primaryAppId == 1490570,
-                  "primary_appid still captured (base game, for reference)");
-            CHECK(out.records[0].primaryAppName ==
+            CHECK(out.records[0].packageName ==
                       "git gud - Branch Strategy Bootcamp",
-                  "name resolved via appid, so the DLC gets its own name");
+                  "DLC identity comes from the package name");
+            CHECK(out.records[0].primaryAppId == 1490570 &&
+                      out.records[0].primaryAppName == "git gud",
+                  "primary_appid/name is the base game, not the DLC");
+        }
+    }
+    {
+        // A package Steam did not describe in package_info leaves the name
+        // empty rather than inventing one (the aggregator then falls back to
+        // primary_appid).
+        DetailedSalesPage out;
+        auto r = ParseDetailedSalesPage(
+            R"({"response":{"max_id":"7","results":[)"
+            R"({"line_item_type":"Package","package_sale_type":"Steam",)"
+            R"("packageid":999999,"primary_appid":1490570,"net_units_sold":1})"
+            R"(]}})",
+            out);
+        CHECK(r.ok() && out.records.size() == 1, "row without package_info ok");
+        if (out.records.size() == 1) {
+            CHECK(out.records[0].packageId == 999999 &&
+                      out.records[0].packageName.empty(),
+                  "undescribed package leaves the name empty");
         }
     }
 }

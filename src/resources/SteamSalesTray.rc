@@ -12,7 +12,7 @@ IDI_APPICON             ICON                    "app.ico"
 
 /////////////////////////////////////////////////////////////////////////////
 // Settings dialog
-IDD_SETTINGS DIALOGEX 0, 0, 260, 262
+IDD_SETTINGS DIALOGEX 0, 0, 260, 290
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Steam Sales Tray - Settings"
 FONT 9, "Segoe UI", 400, 0, 0x1
@@ -37,15 +37,21 @@ BEGIN
                     7, 156, 120, 14
     PUSHBUTTON      "Remove Stored API Key", IDC_BUTTON_REMOVEKEY,
                     133, 156, 120, 14
+    LTEXT           "Force resync recent days (re-fetches from Steam, overwriting local data for those dates only)",
+                    -1, 7, 174, 246, 16
+    EDITTEXT        IDC_EDIT_RESYNC_DAYS, 7, 192, 40, 14,
+                    ES_NUMBER | ES_AUTOHSCROLL
+    LTEXT           "days back", -1, 51, 195, 60, 8
+    PUSHBUTTON      "Force Resync", IDC_BUTTON_FORCERESYNC, 133, 192, 120, 14
     LTEXT           "Publisher API Key (optional - enables DLC/Unreleased detection)",
-                    -1, 7, 180, 246, 8
-    EDITTEXT        IDC_EDIT_PUBLISHER_APIKEY, 7, 191, 246, 14,
+                    -1, 7, 208, 246, 8
+    EDITTEXT        IDC_EDIT_PUBLISHER_APIKEY, 7, 219, 246, 14,
                     ES_PASSWORD | ES_AUTOHSCROLL
-    LTEXT           "", IDC_STATIC_PUBLISHER_KEYSTATUS, 7, 209, 246, 8
+    LTEXT           "", IDC_STATIC_PUBLISHER_KEYSTATUS, 7, 237, 246, 8
     PUSHBUTTON      "Remove Stored Publisher Key", IDC_BUTTON_REMOVE_PUBLISHERKEY,
-                    7, 221, 150, 14
-    DEFPUSHBUTTON   "Save", IDOK, 203, 240, 50, 14
-    PUSHBUTTON      "Cancel", IDCANCEL, 149, 240, 50, 14
+                    7, 249, 150, 14
+    DEFPUSHBUTTON   "Save", IDOK, 203, 268, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 149, 268, 50, 14
 END
 
 /////////////////////////////////////////////////////////////////////////////

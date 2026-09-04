@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "storage/Models.h"
@@ -92,6 +93,11 @@ public:
     // unreleased titles, which never appear in daily_product_sales).
     bool UpsertKnownApp(std::int64_t appId, const std::string& displayNameUtf8,
                        const std::string& appType, const std::string& nowUtc);
+
+    // display_name (UTF-8) -> app_id for every known app, used to resolve a
+    // sale's package name to the app it sells. Names are as Steam reports
+    // them, so a DLC package resolves to the DLC's own appid.
+    std::unordered_map<std::string, std::int64_t> GetAppIdsByName();
 
     // Per-app wishlist balance rows for a period, for the per-product "WL
     // Balance" column (as opposed to the SumWishlistBalance* scalars above,

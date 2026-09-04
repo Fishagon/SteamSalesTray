@@ -16,17 +16,23 @@ struct ChangedDates {
 };
 
 // One raw line-item record from GetDetailedSales, before category filtering.
-// Filtering/aggregation (Package + Steam, group by appid) happens in the
+// Filtering/aggregation (Package + Steam, resolved to an app) happens in the
 // aggregator (Phase 4) so this stays a faithful representation.
+//
+// What Steam actually sends per row, verified against live responses: the
+// thing sold is a *package* (packageid, named via response.package_info).
+// There is no per-row appid. primary_appid is only "the appid that this
+// package associates to for purpose of additional revenue share accrual",
+// which for a DLC package is the base game - so it cannot identify the
+// product sold. The package name is the only per-row DLC identity available.
 struct DetailedSalesRecord {
     std::string lineItemType;      // e.g. "Package", "MicroTxn"
     std::string packageSaleType;   // e.g. "Steam", "Retail"
-    // The app/DLC actually being sold. NOT primary_appid: per Steam's docs,
-    // primary_appid is "the appid that this package associates to for
-    // purpose of additional revenue share accrual", which for a DLC package
-    // is typically the base game, not the DLC itself - using it here would
-    // misattribute DLC units to the base game.
-    std::int64_t appId = 0;
+    // The package actually sold, and its name from the package_info lookup.
+    std::int64_t packageId = 0;
+    std::string packageName;
+    // Revenue-share attribution target (base game for a DLC package), plus
+    // its name from the app_info lookup. Used only as a fallback identity.
     std::int64_t primaryAppId = 0;
     std::string primaryAppName;
     std::int64_t netUnitsSold = 0;

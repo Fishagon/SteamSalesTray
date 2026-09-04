@@ -17,15 +17,19 @@ static int g_fail = 0;
 
 using steam::DetailedSalesRecord;
 
+// A row as GetDetailedSales actually sends it: identity is the package, and
+// `primaryApp`/`name` are the revenue-share target (the base game for DLC).
 static DetailedSalesRecord Rec(const char* type, const char* sale,
-                               std::int64_t app, const char* name,
+                               std::int64_t primaryApp, const char* name,
                                std::int64_t net, std::int64_t gross = 0,
-                               std::int64_t ret = 0) {
+                               std::int64_t ret = 0,
+                               const char* packageName = "") {
     DetailedSalesRecord r;
     r.lineItemType = type;
     r.packageSaleType = sale;
-    r.appId = app;
+    r.primaryAppId = primaryApp;
     r.primaryAppName = name;
+    r.packageName = packageName;
     r.netUnitsSold = net;
     r.grossUnitsSold = gross;
     r.grossUnitsReturned = ret;
@@ -41,6 +45,8 @@ static std::int64_t UnitsFor(const std::vector<storage::ProductUnits>& v,
 
 static void TestAggregation() {
     std::printf("[Aggregation]\n");
+    const sync::AppIdsByName kNoApps;
+
     std::vector<DetailedSalesRecord> recs = {
         Rec("Package", "Steam", 480, "git gud", 2, 3, 1),
         Rec("Package", "Steam", 480, "", 1, 1, 0),        // 2nd pkg, same app
@@ -49,7 +55,7 @@ static void TestAggregation() {
         Rec("Package", "Steam", 0, "orphan", 7),           // excluded (app 0)
         Rec("Package", "Steam", 490, "Deluxe", -3, 0, 3),  // negative net
     };
-    auto rows = sync::AggregateDate(recs);
+    auto rows = sync::AggregateDate(recs, kNoApps);
     CHECK(rows.size() == 2, "only Steam packages with app id kept (2 groups)");
 
     std::int64_t net480 = 0, net490 = 0;
@@ -61,6 +67,47 @@ static void TestAggregation() {
     CHECK(net480 == 3, "two packages for app 480 summed (2+1=3)");
     CHECK(name480 == "git gud", "kept non-empty name across records");
     CHECK(net490 == -3, "negative net preserved");
+
+    // The bug this attribution exists for: a DLC package and its base game
+    // arrive with the SAME primary_appid, distinguishable only by package
+    // name. Without the split, all 3 units would land on the base game.
+    const sync::AppIdsByName known = {
+        {"git gud", 1490570},
+        {"git gud - Branch Strategy Bootcamp", 5118140},
+    };
+    std::vector<DetailedSalesRecord> mixed = {
+        Rec("Package", "Steam", 1490570, "git gud", 2, 2, 0, "git gud"),
+        Rec("Package", "Steam", 1490570, "git gud", 1, 1, 0,
+            "git gud - Branch Strategy Bootcamp"),
+    };
+    auto split = sync::AggregateDate(mixed, known);
+    CHECK(split.size() == 2, "DLC and base game split into separate rows");
+    std::int64_t baseNet = -1, dlcNet = -1;
+    std::string dlcName;
+    for (auto& r : split) {
+        if (r.appId == 1490570) baseNet = r.netUnitsSold;
+        if (r.appId == 5118140) { dlcNet = r.netUnitsSold; dlcName = r.displayName; }
+    }
+    CHECK(baseNet == 2, "base game keeps only its own 2 units");
+    CHECK(dlcNet == 1, "DLC units credited to the DLC's own appid");
+    CHECK(dlcName == "git gud - Branch Strategy Bootcamp",
+          "DLC row shows the DLC's name");
+
+    // A package name that matches no known app (bundle, CD-key pack, or no
+    // publisher key configured) falls back to primary_appid, and must NOT
+    // rename the app it pays out to.
+    std::vector<DetailedSalesRecord> bundle = {
+        Rec("Package", "Steam", 1490570, "git gud", 4, 4, 0,
+            "git gud Deluxe Bundle"),
+    };
+    auto fell = sync::AggregateDate(bundle, known);
+    CHECK(fell.size() == 1 && fell[0].appId == 1490570 &&
+              fell[0].netUnitsSold == 4,
+          "unknown package name falls back to primary_appid");
+    if (fell.size() == 1) {
+        CHECK(fell[0].displayName == "git gud",
+              "fallback keeps the app's own name, not the package name");
+    }
 }
 
 static void TestDatabase() {
@@ -281,6 +328,19 @@ static void TestProductClassification() {
     const auto* afterResync = FindProduct(productsAfterResync, 480);
     CHECK(afterResync && afterResync->appType == "application",
           "ReplaceDate (sales path) does not clobber app_type");
+
+    // Name -> appid lookup that sale attribution resolves package names
+    // against. DLC discovered only via the app list must be in it, otherwise
+    // DLC sales cannot be told apart from their base game.
+    const auto byName = db.GetAppIdsByName();
+    CHECK(byName.size() == 3, "every known app is in the name lookup");
+    CHECK(byName.count("Some DLC") == 1 && byName.at("Some DLC") == 222850,
+          "app-list-only DLC is resolvable by name");
+    CHECK(byName.count("Upcoming Game") == 1 &&
+              byName.at("Upcoming Game") == 999999,
+          "unreleased app is resolvable by name");
+    CHECK(byName.count("No Such Product") == 0,
+          "unknown name is absent (caller falls back to primary_appid)");
 
     // Per-app wishlist balance rows, including an app with wishlist data but
     // no sales at all (the unreleased title).
