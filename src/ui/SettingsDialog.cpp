@@ -94,22 +94,34 @@ struct DialogState {
     bool initialHideLifetime = false;
 };
 
+constexpr wchar_t kSavedKeyStatus[] =
+    L"✓ Saved, encrypted for your Windows account.";
+constexpr wchar_t kSavedKeyCue[] =
+    L"Saved key in use - paste a new one to replace it";
+
+// Updates the status line under a key field, and its cue banner (shown while
+// the edit is empty), to reflect whether a key is already stored.
 void SetKeyStatusLabel(HWND dlg, const DialogState& state) {
     const bool has = state.store.HasStoredKey();
     ::SetDlgItemTextW(dlg, IDC_STATIC_KEYSTATUS,
-                      has ? L"A stored API key is configured. Enter a new key "
-                            L"to replace it."
-                          : L"No API key stored. Enter one to enable syncing.");
+                      has ? kSavedKeyStatus : L"Required for syncing sales.");
+    ::SendDlgItemMessageW(
+        dlg, IDC_EDIT_APIKEY, EM_SETCUEBANNER, TRUE,
+        reinterpret_cast<LPARAM>(has ? kSavedKeyCue
+                                     : L"Paste your Financial API key"));
 }
 
 void SetPublisherKeyStatusLabel(HWND dlg, const DialogState& state) {
     const bool has = state.publisherStore.HasStoredKey();
     ::SetDlgItemTextW(
         dlg, IDC_STATIC_PUBLISHER_KEYSTATUS,
-        has ? L"A stored publisher key is configured. Enter a new key to "
-              L"replace it."
-            : L"No publisher key stored - DLC/Unreleased titles won't be "
-              L"detected.");
+        has ? kSavedKeyStatus
+            : L"Enables detection of DLC and unreleased titles.");
+    ::SendDlgItemMessageW(
+        dlg, IDC_EDIT_PUBLISHER_APIKEY, EM_SETCUEBANNER, TRUE,
+        reinterpret_cast<LPARAM>(
+            has ? kSavedKeyCue
+                : L"Steamworks Web API key (not the Financial key)"));
 }
 
 void PopulateIntervalCombo(HWND dlg, storage::RefreshInterval current) {
@@ -138,18 +150,11 @@ storage::RefreshInterval SelectedInterval(HWND dlg) {
 }
 
 void OnInitDialog(HWND dlg, DialogState* state) {
-    // Cue banner shown when the edit is empty and unfocused.
-    ::SendDlgItemMessageW(dlg, IDC_EDIT_APIKEY, EM_SETCUEBANNER, TRUE,
-                          reinterpret_cast<LPARAM>(
-                              L"Enter a new key to replace the stored one"));
+    // Cue banners are set with the key status labels below.
     ::SendDlgItemMessageW(dlg, IDC_EDIT_APIKEY, EM_SETPASSWORDCHAR,
                           kPasswordChar, 0);
     ::SendDlgItemMessageW(dlg, IDC_EDIT_APIKEY, EM_SETLIMITTEXT, 512, 0);
 
-    ::SendDlgItemMessageW(
-        dlg, IDC_EDIT_PUBLISHER_APIKEY, EM_SETCUEBANNER, TRUE,
-        reinterpret_cast<LPARAM>(
-            L"Your normal Steamworks Web API key (not the Financial key)"));
     ::SendDlgItemMessageW(dlg, IDC_EDIT_PUBLISHER_APIKEY, EM_SETPASSWORDCHAR,
                           kPasswordChar, 0);
     ::SendDlgItemMessageW(dlg, IDC_EDIT_PUBLISHER_APIKEY, EM_SETLIMITTEXT, 512,
@@ -194,7 +199,7 @@ void OnTestConnection(HWND dlg, DialogState* state) {
                                                     IDC_EDIT_APIKEY)));
     if (text.empty()) {
         ::SetDlgItemTextW(dlg, IDC_STATIC_TESTRESULT,
-                          L"Enter a key above to test it.");
+                          L"Paste a key above to test it.");
         return;
     }
     security::SecureString keyUtf8 = security::WideToSecureUtf8(text);
@@ -205,8 +210,12 @@ void OnTestConnection(HWND dlg, DialogState* state) {
                           L"Live testing is not available in this build.");
         return;
     }
+    // The test blocks this thread, so paint the progress text first.
     ::SetDlgItemTextW(dlg, IDC_STATIC_TESTRESULT, L"Testing…");
+    ::UpdateWindow(::GetDlgItem(dlg, IDC_STATIC_TESTRESULT));
+    const HCURSOR oldCursor = ::SetCursor(::LoadCursorW(nullptr, IDC_WAIT));
     const KeyTestResult result = (*state->validator)(keyUtf8);
+    ::SetCursor(oldCursor);
     ::SetDlgItemTextW(dlg, IDC_STATIC_TESTRESULT, result.message.c_str());
 }
 
@@ -224,7 +233,8 @@ void OnClearCache(HWND dlg, DialogState* state) {
     // DB connection.
     state->outcome.cacheCleared = true;
     ::SetDlgItemTextW(dlg, IDC_STATIC_TESTRESULT,
-                      L"Local sales cache will be cleared and re-synced.");
+                      L"The local cache will be cleared and re-synced after "
+                      L"you close Settings.");
 }
 
 void OnForceResync(HWND dlg, DialogState* state) {
