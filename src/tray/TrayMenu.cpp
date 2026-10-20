@@ -5,12 +5,13 @@
 namespace tray {
 
 namespace {
-// Adds a disabled, display-only row. A tab right-aligns the count column.
+// Adds a summary row; choosing it opens the Sales window on that period. It
+// stays enabled so the figures render at full contrast rather than grayed.
+// A tab right-aligns the count column.
 void AppendSummaryRow(HMENU menu, UINT id, const wchar_t* label,
                       const std::wstring& value) {
     std::wstring text = std::wstring(label) + L"\t" + value;
     ::AppendMenuW(menu, MF_STRING, id, text.c_str());
-    ::EnableMenuItem(menu, id, MF_BYCOMMAND | MF_GRAYED);
 }
 
 // Force `hwnd` to the foreground even when the caller lacks foreground rights.
@@ -42,32 +43,30 @@ UINT ShowTrayMenu(HWND owner, POINT pt, const SummaryTotals& totals) {
         return 0;
     }
 
-    // Header (disabled, bold-ish by convention of being the default item).
-    ::AppendMenuW(menu, MF_STRING, 0, L"Steam Sales");
-    ::EnableMenuItem(menu, 0, MF_BYPOSITION | MF_GRAYED);
-    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    // Disabled caption saying what the figures below are.
+    ::AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"Net units sold");
 
     AppendSummaryRow(menu, IDM_SUMMARY_TODAY,     L"Today",       totals.today);
     AppendSummaryRow(menu, IDM_SUMMARY_YESTERDAY, L"Yesterday",   totals.yesterday);
-    AppendSummaryRow(menu, IDM_SUMMARY_7DAY,     L"Last 7 Days",  totals.week);
-    AppendSummaryRow(menu, IDM_SUMMARY_30DAY,    L"Last 30 Days", totals.month);
+    AppendSummaryRow(menu, IDM_SUMMARY_7DAY,     L"Last 7 days",  totals.week);
+    AppendSummaryRow(menu, IDM_SUMMARY_30DAY,    L"Last 30 days", totals.month);
     if (totals.showLifetime) {
         AppendSummaryRow(menu, IDM_SUMMARY_LIFETIME, L"Lifetime",
                          totals.lifetime);
     }
 
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    ::AppendMenuW(menu, MF_STRING, IDM_VIEW_SALES, L"View Product Sales…");
+    ::AppendMenuW(menu, MF_STRING, IDM_VIEW_SALES, L"View Product Sales");
     ::AppendMenuW(menu, MF_STRING, IDM_REFRESH_NOW, L"Refresh Now");
     ::AppendMenuW(menu, MF_STRING, IDM_SETTINGS, L"Settings…");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, IDM_OPEN_FINANCIALS,
                   L"Open Steamworks Financials");
-    ::AppendMenuW(menu, MF_STRING, IDM_ABOUT, L"About");
+    ::AppendMenuW(menu, MF_STRING, IDM_ABOUT, L"About Steam Sales Tray");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, IDM_EXIT, L"Exit");
 
-    // Double-click default action = View Product Sales.
+    // Bold default item = what clicking the tray icon does.
     ::SetMenuDefaultItem(menu, IDM_VIEW_SALES, FALSE);
 
     // Take the foreground so the notification-area flyout dismisses and our

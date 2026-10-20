@@ -5,7 +5,7 @@
 
 namespace tray {
 
-// Summary figures shown as disabled rows at the top of the menu. Defaults to an
+// Summary figures shown as rows at the top of the menu. Defaults to an
 // hyphen placeholder until real totals are available (Phase 4+).
 struct SummaryTotals {
     std::wstring today     = L"-";

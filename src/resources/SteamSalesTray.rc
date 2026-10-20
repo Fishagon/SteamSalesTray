@@ -12,46 +12,51 @@ IDI_APPICON             ICON                    "app.ico"
 
 /////////////////////////////////////////////////////////////////////////////
 // Settings dialog
-IDD_SETTINGS DIALOGEX 0, 0, 260, 290
+IDD_SETTINGS DIALOGEX 0, 0, 280, 322
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Steam Sales Tray - Settings"
+CAPTION "Steam Sales Tray Settings"
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "Steam Financial API Key", -1, 7, 7, 246, 8
-    EDITTEXT        IDC_EDIT_APIKEY, 7, 18, 246, 14, ES_PASSWORD | ES_AUTOHSCROLL
-    LTEXT           "", IDC_STATIC_KEYSTATUS, 7, 36, 246, 8
-    CONTROL         "Show key", IDC_CHECK_SHOWKEY, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 7, 48, 70, 10
-    PUSHBUTTON      "Test Connection", IDC_BUTTON_TEST, 160, 46, 93, 14
-    LTEXT           "", IDC_STATIC_TESTRESULT, 7, 64, 246, 8
-    LTEXT           "Refresh interval", -1, 7, 80, 100, 8
-    COMBOBOX        IDC_COMBO_INTERVAL, 7, 90, 120, 90,
+    GROUPBOX        "Steam Financial API key", -1, 7, 7, 266, 64
+    EDITTEXT        IDC_EDIT_APIKEY, 14, 20, 252, 14, ES_PASSWORD | ES_AUTOHSCROLL
+    LTEXT           "", IDC_STATIC_KEYSTATUS, 14, 37, 252, 8, SS_NOPREFIX
+    CONTROL         "Show keys", IDC_CHECK_SHOWKEY, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 52, 90, 10
+    PUSHBUTTON      "Remove Key...", IDC_BUTTON_REMOVEKEY, 116, 50, 72, 14
+    PUSHBUTTON      "Test Connection", IDC_BUTTON_TEST, 192, 50, 74, 14
+
+    GROUPBOX        "Publisher Web API key (optional)", -1, 7, 77, 266, 64
+    EDITTEXT        IDC_EDIT_PUBLISHER_APIKEY, 14, 90, 252, 14,
+                    ES_PASSWORD | ES_AUTOHSCROLL
+    LTEXT           "", IDC_STATIC_PUBLISHER_KEYSTATUS, 14, 107, 252, 8,
+                    SS_NOPREFIX
+    PUSHBUTTON      "Remove Key...", IDC_BUTTON_REMOVE_PUBLISHERKEY,
+                    194, 120, 72, 14
+
+    GROUPBOX        "General", -1, 7, 147, 266, 70
+    LTEXT           "Refresh interval:", -1, 14, 162, 62, 8
+    COMBOBOX        IDC_COMBO_INTERVAL, 80, 160, 100, 90,
                     CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     CONTROL         "Start automatically when I sign in", IDC_CHECK_STARTUP,
-                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 112, 246, 10
-    CONTROL         "Notify when new units are detected", IDC_CHECK_NOTIFY,
-                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 124, 246, 10
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 177, 252, 10
+    CONTROL         "Notify me when new units are sold", IDC_CHECK_NOTIFY,
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 189, 252, 10
     CONTROL         "Hide lifetime totals", IDC_CHECK_HIDELIFETIME,
-                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 136, 246, 10
-    PUSHBUTTON      "Clear Local Sales Cache", IDC_BUTTON_CLEARCACHE,
-                    7, 156, 120, 14
-    PUSHBUTTON      "Remove Stored API Key", IDC_BUTTON_REMOVEKEY,
-                    133, 156, 120, 14
-    LTEXT           "Force resync recent days (re-fetches from Steam, overwriting local data for those dates only)",
-                    -1, 7, 174, 246, 16
-    EDITTEXT        IDC_EDIT_RESYNC_DAYS, 7, 192, 40, 14,
-                    ES_NUMBER | ES_AUTOHSCROLL
-    LTEXT           "days back", -1, 51, 195, 60, 8
-    PUSHBUTTON      "Force Resync", IDC_BUTTON_FORCERESYNC, 133, 192, 120, 14
-    LTEXT           "Publisher API Key (optional - enables DLC/Unreleased detection)",
-                    -1, 7, 208, 246, 8
-    EDITTEXT        IDC_EDIT_PUBLISHER_APIKEY, 7, 219, 246, 14,
-                    ES_PASSWORD | ES_AUTOHSCROLL
-    LTEXT           "", IDC_STATIC_PUBLISHER_KEYSTATUS, 7, 237, 246, 8
-    PUSHBUTTON      "Remove Stored Publisher Key", IDC_BUTTON_REMOVE_PUBLISHERKEY,
-                    7, 249, 150, 14
-    DEFPUSHBUTTON   "Save", IDOK, 203, 268, 50, 14
-    PUSHBUTTON      "Cancel", IDCANCEL, 149, 268, 50, 14
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 201, 252, 10
+
+    GROUPBOX        "Local data", -1, 7, 223, 266, 54
+    LTEXT           "Re-fetch the last", -1, 14, 239, 58, 8
+    EDITTEXT        IDC_EDIT_RESYNC_DAYS, 74, 237, 26, 14,
+                    ES_NUMBER | ES_AUTOHSCROLL | ES_CENTER
+    LTEXT           "days from Steam", -1, 104, 239, 80, 8
+    PUSHBUTTON      "Force Resync...", IDC_BUTTON_FORCERESYNC, 192, 237, 74, 14
+    LTEXT           "Delete all cached sales and re-download everything",
+                    -1, 14, 258, 176, 8
+    PUSHBUTTON      "Clear Cache...", IDC_BUTTON_CLEARCACHE, 192, 256, 74, 14
+
+    LTEXT           "", IDC_STATIC_TESTRESULT, 7, 283, 266, 16, SS_NOPREFIX
+    DEFPUSHBUTTON   "Save", IDOK, 169, 301, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 223, 301, 50, 14
 END
 
 /////////////////////////////////////////////////////////////////////////////

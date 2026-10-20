@@ -97,6 +97,9 @@ int App::Run(HINSTANCE instance) {
     MSG msg;
     while (::GetMessageW(&msg, nullptr, 0, 0) > 0) {
         // Let the modeless sales window handle its own tab/keyboard navigation.
+        if (salesWindow_.PreTranslateMessage(msg)) {
+            continue;
+        }
         const HWND sales = salesWindow_.Handle();
         if (sales && ::IsDialogMessageW(sales, &msg)) {
             continue;
@@ -191,6 +194,8 @@ LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_APP_SYNC_COMPLETED:
         case WM_APP_SYNC_FAILED:
             UpdateTray();
+            salesWindow_.SetSyncing(sync_.GetStatus().status ==
+                                    sync::SyncStatus::Syncing);
             salesWindow_.Refresh();  // no-op if hidden
             return 0;
         case WM_APP_TOTALS_CHANGED:
@@ -333,9 +338,10 @@ void App::UpdateTray() {
         default:
             if (dbOpen_) {
                 const std::int64_t today = db_.SumForDate(platform::SteamToday());
-                tip = L"Steam Sales - Today: " + FormatCount(today);
+                tip = L"Steam Sales\nToday: " + FormatCount(today);
                 if (!storage::SettingsStore::GetHideLifetime()) {
-                    tip += L" | Lifetime: " + FormatCount(db_.SumLifetime());
+                    tip += L"  ·  Lifetime: " +
+                           FormatCount(db_.SumLifetime());
                 }
             } else {
                 tip = L"Steam Sales";
@@ -375,6 +381,22 @@ void App::OnCommand(UINT id) {
     switch (id) {
         case IDM_VIEW_SALES:
             OnShowSales();
+            break;
+        // Clicking a tray summary row opens the window on that period.
+        case IDM_SUMMARY_TODAY:
+            salesWindow_.ShowPeriod(ui::SalesPeriod::Today);
+            break;
+        case IDM_SUMMARY_YESTERDAY:
+            salesWindow_.ShowPeriod(ui::SalesPeriod::Yesterday);
+            break;
+        case IDM_SUMMARY_7DAY:
+            salesWindow_.ShowPeriod(ui::SalesPeriod::Last7Days);
+            break;
+        case IDM_SUMMARY_30DAY:
+            salesWindow_.ShowPeriod(ui::SalesPeriod::Last30Days);
+            break;
+        case IDM_SUMMARY_LIFETIME:
+            salesWindow_.ShowPeriod(ui::SalesPeriod::Lifetime);
             break;
         case IDM_REFRESH_NOW:
             sync_.RequestManualRefresh();
